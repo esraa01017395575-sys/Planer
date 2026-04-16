@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useAppContext } from '../context/AppContext';
-import { useGetTasks, useUpdateTask, useCreateTask, useDeleteTask } from '../lib/hooks';
+import { useGetTasks, useUpdateTask, useCreateTask, useDeleteTask, useCompleteTask } from '../lib/hooks';
 import { DragDropContext, Droppable, Draggable, DroppableProps, DraggableProps } from '@hello-pangea/dnd';
 import { GoogleGenAI, Type } from "@google/genai";
 import { 
@@ -15,6 +15,7 @@ export const Tasks = ({ currentUser }: any) => {
   const { t, language, addNotification } = useAppContext();
   const { data: tasksData, loading: isLoading, refetch } = useGetTasks();
   const { mutate: updateTask } = useUpdateTask();
+  const { mutate: completeTask } = useCompleteTask();
   const { mutate: createTask, isPending: isCreating } = useCreateTask();
   const { mutate: deleteTask } = useDeleteTask();
   
@@ -69,19 +70,33 @@ export const Tasks = ({ currentUser }: any) => {
     const updatedTasks = tasks.map(t => t.id === draggableId ? { ...t, status: newStatus } : t);
     setTasks(updatedTasks);
 
-    updateTask({ id: draggableId, data: { status: newStatus } }, {
-      onError: () => {
-        addNotification("فشل تحديث حالة المهمة", "error");
-        setTasks(tasks); // Revert
-      }
-    });
+    if (newStatus === 'done') {
+      completeTask({ id: draggableId }, {
+        onSuccess: () => {
+          addNotification("تم إكمال المهمة! +XP", "success");
+          refetch();
+        },
+        onError: () => {
+          addNotification("فشل تحديث حالة المهمة", "error");
+          setTasks(tasks); 
+        }
+      });
+    } else {
+      updateTask({ id: draggableId, data: { status: newStatus } }, {
+        onSuccess: () => refetch(),
+        onError: () => {
+          addNotification("فشل تحديث حالة المهمة", "error");
+          setTasks(tasks); // Revert
+        }
+      });
+    }
   };
 
   const columns = [
-    { id: 'draft', title: 'DRAFT', icon: '📝' },
     { id: 'todo', title: 'TO DO', icon: '📌' },
-    { id: 'doing', title: 'DOING', icon: '⚡' },
+    { id: 'in_progress', title: 'DOING', icon: '⚡' },
     { id: 'done', title: 'DONE', icon: '✅' },
+    { id: 'cancelled', title: 'CANCELLED', icon: '🚫' },
   ];
 
   const startPomodoro = (task: any) => {
@@ -113,12 +128,14 @@ export const Tasks = ({ currentUser }: any) => {
     const taskData = {
       title: formData.get('title'),
       description: formData.get('description'),
-      status: formData.get('status'),
-      priority: formData.get('priority'),
+      status: formData.get('status') || 'todo',
+      priority: formData.get('priority') || 'medium',
       scheduled_time: formData.get('start_time'),
       estimated_min: parseInt(formData.get('duration') as string) || 25,
       due_date: format(new Date(), 'yyyy-MM-dd'),
       subtasks: subtasks,
+      category: 'work', // Default category as it's required in schema
+      xp_reward: 20
     };
 
     if (editingTask) {
@@ -182,7 +199,7 @@ export const Tasks = ({ currentUser }: any) => {
   };
 
   const toggleSubtask = (id: string) => {
-    setSubtasks(subtasks.map(st => st.id === id ? { ...st, completed: !st.completed } : st));
+    setSubtasks(subtasks.map(st => st.id === id ? { ...st, is_done: !st.is_done, completed: !st.completed } : st));
   };
 
   const removeSubtask = (id: string) => {
@@ -437,10 +454,10 @@ export const Tasks = ({ currentUser }: any) => {
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-text-secondary uppercase tracking-widest ml-1">Status</label>
                     <select name="status" defaultValue={editingTask?.status || 'todo'} className="w-full bg-bg-secondary/50 border border-border rounded-xl py-3 px-4 text-text-primary outline-none focus:border-accent transition-all appearance-none">
-                      <option value="draft">Draft</option>
                       <option value="todo">To Do</option>
-                      <option value="doing">Doing</option>
+                      <option value="in_progress">Doing</option>
                       <option value="done">Done</option>
+                      <option value="cancelled">Cancelled</option>
                     </select>
                   </div>
                   <div className="space-y-2">
@@ -478,49 +495,49 @@ export const Tasks = ({ currentUser }: any) => {
                     </button>
                   </div>
                   
-                  <div className="space-y-2">
-                    {subtasks.map((st) => (
-                      <div key={st.id} className="flex items-center justify-between p-3 rounded-xl bg-bg-secondary/30 border border-border/50 group">
-                        <div className="flex items-center gap-3">
+                    <div className="space-y-2">
+                      {subtasks.map((st) => (
+                        <div key={st.id} className="flex items-center justify-between p-3 rounded-xl bg-bg-secondary/30 border border-border/50 group">
+                          <div className="flex items-center gap-3">
+                            <button 
+                              type="button"
+                              onClick={() => toggleSubtask(st.id)}
+                              className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${st.is_done || st.completed ? 'bg-accent border-accent' : 'border-border'}`}
+                            >
+                              {(st.is_done || st.completed) && <CheckCircle2 className="w-3 h-3 text-white" />}
+                            </button>
+                            <span className={`text-sm ${st.is_done || st.completed ? 'text-text-secondary line-through' : 'text-text-primary'}`}>
+                              {st.title}
+                            </span>
+                          </div>
                           <button 
                             type="button"
-                            onClick={() => toggleSubtask(st.id)}
-                            className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${st.completed ? 'bg-accent border-accent' : 'border-border'}`}
+                            onClick={() => removeSubtask(st.id)}
+                            className="opacity-0 group-hover:opacity-100 p-1 text-text-secondary hover:text-red-500 transition-all"
                           >
-                            {st.completed && <CheckCircle2 className="w-3 h-3 text-white" />}
+                            <X className="w-4 h-4" />
                           </button>
-                          <span className={`text-sm ${st.completed ? 'text-text-secondary line-through' : 'text-text-primary'}`}>
-                            {st.title}
-                          </span>
                         </div>
-                        <button 
-                          type="button"
-                          onClick={() => removeSubtask(st.id)}
-                          className="opacity-0 group-hover:opacity-100 p-1 text-text-secondary hover:text-red-500 transition-all"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-                    ))}
-                    
-                    <div className="relative">
-                      <input 
-                        type="text"
-                        placeholder="Add subtask..."
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            const val = (e.target as HTMLInputElement).value;
-                            if (val) {
-                              setSubtasks([...subtasks, { id: Math.random().toString(36).substr(2, 9), title: val, completed: false }]);
-                              (e.target as HTMLInputElement).value = '';
+                      ))}
+                      
+                      <div className="relative">
+                        <input 
+                          type="text"
+                          placeholder="Add subtask..."
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const val = (e.target as HTMLInputElement).value;
+                              if (val) {
+                                setSubtasks([...subtasks, { id: Math.random().toString(36).substr(2, 9), title: val, is_done: false, completed: false }]);
+                                (e.target as HTMLInputElement).value = '';
+                              }
                             }
-                          }
-                        }}
-                        className="w-full bg-transparent border-b border-border py-2 px-1 text-sm text-text-primary outline-none focus:border-accent transition-all"
-                      />
+                          }}
+                          className="w-full bg-transparent border-b border-border py-2 px-1 text-sm text-text-primary outline-none focus:border-accent transition-all"
+                        />
+                      </div>
                     </div>
-                  </div>
                 </div>
 
                 <button 

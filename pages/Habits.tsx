@@ -1,18 +1,26 @@
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../context/AppContext';
 import { useGetHabits, useCompleteHabit, useCreateHabit } from '../lib/hooks';
-import { Flame, Activity, Sparkles, Plus, X, CheckCircle2, MoreVertical, Trophy, Target, Zap, Loader2 } from 'lucide-react';
+import { Flame, Activity, Sparkles, Plus, X, CheckCircle2, MoreVertical, Trophy, Target, Zap, Loader2, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { AppShell } from '../components/layout/AppShell';
+
+const LoadingState = ({ message }: { message: string }) => (
+  <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
+    <Loader2 className="w-10 h-10 text-accent animate-spin" />
+    <p className="text-text-secondary font-medium">{message}</p>
+  </div>
+);
 
 
-const CATEGORIES = ['spiritual', 'health', 'learning', 'productivity', 'social'] as const;
-const EMOJIS = ['🧘', '💪', '📚', '🏃', '🎯', '✍️', '💧', '🌙', '☀️', '🍎', '🧠', '💤'];
+const CATEGORIES = ['work', 'health', 'fitness', 'mindfulness', 'learning', 'social', 'financial'] as const;
+const EMOJIS = ['🧘', '💪', '📚', '🏃', '🎯', '✍️', '💧', '🌙', '☀️', '🍎', '🧠', '💰'];
 
-export default function Habits() {
-  const { data: habits, isLoading, refetch } = useGetHabits();
+export const Habits = () => {
+  const { data: habits, loading: isLoading, refetch } = useGetHabits();
   const { mutate: completeHabit } = useCompleteHabit();
   const { mutate: createHabit, isPending: isCreating } = useCreateHabit();
-  const { toast } = useToast();
+  const { addNotification, language } = useAppContext();
 
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({
@@ -29,25 +37,36 @@ export default function Habits() {
     completeHabit({ id }, {
       onSuccess: () => {
         refetch();
-        toast({ title: '✅ Habit logged! +XP gained' });
+        addNotification(language === 'ar' ? 'تم تسجيل العادة بنجاح! +XP' : 'Habit logged successfully! +XP', 'success');
       },
-      onError: () => toast({ title: 'Failed to log habit', variant: 'destructive' }),
+      onError: () => addNotification(language === 'ar' ? 'فشل في تسجيل العادة' : 'Failed to log habit', 'error'),
     });
   };
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.title.trim()) return;
+
+    // Mapping form fields to DB schema
+    const dbData = {
+      title: form.title,
+      category: form.category,
+      frequency: form.frequency,
+      target_per_week: form.frequency === 'daily' ? 7 : form.target_count,
+      xp_per_complete: form.xp_per_complete,
+      is_active: true
+    };
+
     createHabit(
-      { data: { ...form, is_active: true } as any },
+      { data: dbData },
       {
         onSuccess: () => {
-          toast({ title: 'Habit created!', description: `${form.emoji} ${form.title}` });
+          addNotification(language === 'ar' ? `تم إنشاء العادة: ${form.title}` : `Habit created: ${form.title}`, 'success');
           setShowModal(false);
           setForm({ title: '', description: '', category: 'health', emoji: '💪', frequency: 'daily', target_count: 1, xp_per_complete: 20 });
           refetch();
         },
-        onError: () => toast({ title: 'Failed to create habit', variant: 'destructive' }),
+        onError: () => addNotification(language === 'ar' ? 'فشل في إنشاء العادة' : 'Failed to create habit', 'error'),
       }
     );
   };
