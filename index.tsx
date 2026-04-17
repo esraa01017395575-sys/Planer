@@ -111,6 +111,8 @@ const App = () => {
             )}
           </Route>
 
+
+
           <Route path="/plans">
             {!session ? <Redirect to="/auth" /> : (
               <AppShell>

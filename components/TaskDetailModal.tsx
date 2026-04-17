@@ -37,15 +37,15 @@ type Props = {
 };
 
 const PRIORITIES: { value: Priority; label: string; icon: string; color: string; bg: string }[] = [
-  { value: 'high',   label: 'High',   icon: '🏴', color: 'text-orange-400', bg: 'bg-orange-400/10 border-orange-400/30' },
-  { value: 'medium', label: 'Normal', icon: '🏴', color: 'text-blue-400',   bg: 'bg-blue-400/10 border-blue-400/30' },
-  { value: 'low',    label: 'Low',    icon: '🏴', color: 'text-gray-400',   bg: 'bg-gray-400/10 border-gray-400/30' },
+  { value: 'high', label: 'High', icon: '🏴', color: 'text-orange-400', bg: 'bg-orange-400/10 border-orange-400/30' },
+  { value: 'medium', label: 'Normal', icon: '🏴', color: 'text-blue-400', bg: 'bg-blue-400/10 border-blue-400/30' },
+  { value: 'low', label: 'Low', icon: '🏴', color: 'text-gray-400', bg: 'bg-gray-400/10 border-gray-400/30' },
 ];
 
 const STATUSES: { value: Status; label: string; color: string }[] = [
-  { value: 'todo',  label: 'To Do',  color: 'bg-secondary-foreground' },
-  { value: 'in_progress', label: 'Doing',  color: 'bg-accent' },
-  { value: 'done',  label: 'Done',   color: 'bg-primary' },
+  { value: 'todo', label: 'To Do', color: 'bg-secondary-foreground' },
+  { value: 'in_progress', label: 'Doing', color: 'bg-accent' },
+  { value: 'done', label: 'Done', color: 'bg-primary' },
   { value: 'cancelled', label: 'Cancelled', color: 'bg-muted-foreground' },
 ];
 

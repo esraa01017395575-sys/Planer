@@ -536,3 +536,35 @@ export const useCompleteTask = () => {
 
   return { mutate: completeTask };
 };
+
+export const useRecordPomodoroSession = () => {
+  const [isPending, setIsPending] = useState(false);
+
+  const recordPomodoro = async (data: { task_id?: string; duration_minutes: number }, options?: { onSuccess?: () => void, onError?: (err: any) => void }) => {
+    setIsPending(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setIsPending(false);
+        return;
+      }
+      
+      const { error } = await supabase.from('pomodoro_sessions').insert({
+        user_id: user.id,
+        task_id: data.task_id || null,
+        duration_minutes: data.duration_minutes,
+        completed_at: new Date().toISOString()
+      });
+
+      if (error) throw error;
+      if (options?.onSuccess) options.onSuccess();
+    } catch (err: any) {
+      console.error('Pomodoro Insert Error:', err);
+      if (options?.onError) options.onError(err);
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  return { mutate: recordPomodoro, isPending };
+};
