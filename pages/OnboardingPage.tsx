@@ -21,16 +21,22 @@ export default function OnboardingPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('No user found');
 
-      const { error } = await supabase
-        .from('user_profiles')
+      // Saving basic info to 'users'
+      await supabase
+        .from('users')
         .upsert({
           id: user.id,
-          email: user.email,
           name: formData.name,
+        });
+
+      // Saving life cycle info to 'life_profiles'
+      const { error } = await supabase
+        .from('life_profiles')
+        .upsert({
+          user_id: user.id,
           wake_time: formData.wakeTime,
           sleep_time: formData.sleepTime,
-          energy_peak: formData.energyPeak,
-          is_onboarded: true
+          energy_peak: formData.energyPeak
         });
 
       if (error) throw error;

@@ -85,8 +85,11 @@ export const Dashboard = () => {
             <Sparkles size={16} /> Daily Insight
           </h2>
           <p className="text-2xl md:text-3xl font-display leading-tight text-text-primary italic">
-            "{quote || "Design your day, before it designs you."}"
+            "{quote?.text || "Design your day, before it designs you."}"
           </p>
+          {quote?.author && (
+            <p className="text-sm text-text-secondary mt-2">— {quote.author}</p>
+          )}
           <div className="mt-8 flex items-center gap-4">
             <Link href="/chat">
               <button className="bg-accent text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-accent/20 hover:scale-105 transition-transform flex items-center gap-2">

@@ -43,14 +43,15 @@ const App = () => {
 
   const fetchProfile = async (userId: string) => {
     const { data, error } = await supabase
-      .from('user_profiles')
+      .from('users')
       .select('*')
       .eq('id', userId)
       .single();
 
     if (!error && data) {
       setProfile(data);
-      if (!data.is_onboarded && location !== '/onboarding' && location !== '/auth') {
+      const { data: lp } = await supabase.from('life_profiles').select('id').eq('user_id', userId).single();
+      if (!lp && location !== '/onboarding' && location !== '/auth') {
         setLocation('/onboarding');
       }
     }

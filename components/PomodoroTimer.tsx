@@ -3,6 +3,60 @@ import { Play, Pause, Square, Minimize2, Timer } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { useRecordPomodoroSession } from '../lib/hooks';
 
+// Audio elements for sound effects
+let clickAudio: HTMLAudioElement | null = null;
+let alarmAudio: HTMLAudioElement | null = null;
+let audioInitialized = false;
+
+const initAudioElements = () => {
+  if (audioInitialized) return;
+  try {
+    // Using CDN fallbacks if local files are missing
+    clickAudio = new Audio('/sounds/click.mp3');
+    clickAudio.onerror = () => { (clickAudio as any).src = 'https://assets.mixkit.co/active_storage/sfx/2571/2571-preview.mp3'; };
+    clickAudio.volume = 0.3;
+    clickAudio.preload = 'auto';
+
+    alarmAudio = new Audio('/sounds/alarm.mp3');
+    alarmAudio.onerror = () => { (alarmAudio as any).src = 'https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'; };
+    alarmAudio.volume = 0.5;
+    alarmAudio.preload = 'auto';
+
+    audioInitialized = true;
+  } catch (err) {
+    console.warn('Audio initialization failed:', err);
+  }
+};
+
+const playClick = () => {
+  try {
+    initAudioElements();
+    if (clickAudio) {
+      clickAudio.currentTime = 0;
+      clickAudio.play().catch(() => { });
+    }
+  } catch (err) { }
+};
+
+const playAlarm = () => {
+  try {
+    initAudioElements();
+    if (alarmAudio) {
+      alarmAudio.currentTime = 0;
+      alarmAudio.play().catch((err) => console.log('Alarm play error:', err));
+    }
+  } catch (err) {
+    console.warn('Alarm sound error:', err);
+  }
+};
+
+const stopAlarm = () => {
+  if (alarmAudio) {
+    alarmAudio.pause();
+    alarmAudio.currentTime = 0;
+  }
+};
+
 type Phase = 'focus' | 'break' | 'long-break';
 type PomodoroType = 'classic' | 'deep_work';
 
@@ -67,6 +121,8 @@ export function PomodoroTimer({
 
   const handlePhaseEnd = async () => {
     setRunning(false);
+    // Play alarm sound when phase ends
+    playAlarm();
     if (phase === 'focus') {
       const newCount = sessionCount + 1;
       setSessionCount(newCount);
@@ -177,14 +233,14 @@ export function PomodoroTimer({
       {/* Controls */}
       <div className="flex items-center justify-center gap-3">
         <button
-          onClick={() => { setPhase('focus'); setRunning(false); }}
+          onClick={() => { playClick(); setPhase('focus'); setRunning(false); }}
           className="p-2.5 rounded-xl bg-white/5 text-gray-400 hover:text-white transition-colors"
           title="Reset"
         >
           <Square size={18} />
         </button>
         <button
-          onClick={() => { setRunning(r => !r); requestNotificationPermission(); }}
+          onClick={() => { playClick(); setRunning(r => !r); requestNotificationPermission(); }}
           className={`p-3 rounded-xl font-bold text-white transition-all shadow-lg ${running
             ? 'bg-emerald-500 shadow-emerald-500/30 hover:bg-emerald-600'
             : 'bg-indigo-600 shadow-indigo-600/30 hover:bg-indigo-700'}`}
@@ -192,7 +248,7 @@ export function PomodoroTimer({
           {running ? <Pause size={22} className="fill-white" /> : <Play size={22} className="fill-white" />}
         </button>
         <button
-          onClick={() => setRunning(false)}
+          onClick={() => { playClick(); setRunning(false); stopAlarm(); }}
           className="p-2.5 rounded-xl bg-white/5 text-gray-400 hover:text-white transition-colors"
           title="Stop"
         >

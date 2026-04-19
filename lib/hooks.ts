@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabase';
 import { useAppContext } from '../context/AppContext';
 
@@ -15,13 +15,13 @@ export const useGetDailySchedule = (options?: { date?: string }) => {
     }
 
     const dateFilter = options?.date || new Date().toISOString().split('T')[0];
-    
-    // Join with tasks to get titles and metadata
+
+    // Aligning with user's schema: using 'date' instead of 'date_str'
     const { data: schedule, error } = await supabase
       .from('daily_schedule')
       .select('*, task:tasks(*)')
       .eq('user_id', user.id)
-      .eq('date_str', dateFilter); // Using date_str from schema if available, or fallback to your current schema logic
+      .eq('date', dateFilter); 
 
     if (error) {
       console.error('Error fetching schedule:', error);
@@ -52,7 +52,8 @@ export const useGetHabits = () => {
       }
 
       const today = new Date().toISOString().split('T')[0];
-      // Updated to match schema: using habit_logs join if exists, or fallback
+      
+      // Aligning with user's schema: habit_logs uses 'completed' (boolean) and 'date'
       const { data: habits, error } = await supabase
         .from('habits')
         .select(`
@@ -60,8 +61,9 @@ export const useGetHabits = () => {
           habit_logs (
             id,
             completed_at,
-            status,
-            xp_earned
+            completed,
+            xp_earned,
+            date
           )
         `)
         .eq('user_id', user.id);
@@ -70,19 +72,17 @@ export const useGetHabits = () => {
         console.error('Error fetching habits:', error);
       } else if (habits) {
         const processed = habits.map(habit => {
-          // Check if any log is from today
           const completedToday = habit.habit_logs?.some((log: any) => {
-            const logDate = new Date(log.completed_at).toISOString().split('T')[0];
-            return logDate === today;
+            const logDate = log.date; 
+            return logDate === today && log.completed;
           });
-          
+
           const last7Days = Array.from({ length: 7 }, (_, i) => {
             const d = new Date();
             d.setDate(d.getDate() - (6 - i));
             const dateStr = d.toISOString().split('T')[0];
             return habit.habit_logs?.some((log: any) => {
-               const logDate = new Date(log.completed_at).toISOString().split('T')[0];
-               return logDate === dateStr;
+              return log.date === dateStr && log.completed;
             }) || false;
           });
 
@@ -121,7 +121,7 @@ export const useGetTasks = () => {
         return;
       }
 
-      // Fetch all tasks for the user to build hierarchy in-memory
+      // Updated to handle subtasks separately or through the task query if possible
       const { data: allTasks, error } = await supabase
         .from('tasks')
         .select('*')
@@ -131,16 +131,11 @@ export const useGetTasks = () => {
       if (error) {
         console.error('Error fetching tasks:', error);
       } else if (allTasks) {
-        // Build hierarchy: root tasks (parentId is null) with their children
-        const topLevelTasks = allTasks.filter(t => !t.parentId);
-        const tasksWithHierarchy = topLevelTasks.map(task => {
-          const children = allTasks.filter(t => t.parentId === task.id);
+        // Build hierarchy using 'id' and potential subtasks logic
+        const tasksWithHierarchy = allTasks.map(task => {
           return {
             ...task,
-            subtasks: children.map(c => ({
-              ...c,
-              completed: c.status === 'done' || c.is_done // Support both flags for UI compatibility
-            }))
+            completed: task.status === 'done'
           };
         });
         setData(tasksWithHierarchy);
@@ -160,18 +155,56 @@ export const useGetTasks = () => {
 };
 
 export const useGetDailyQuote = () => {
-  const [data, setData] = useState<string>("");
+  const [data, setData] = useState<{ text: string, author: string } | null>(null);
   const [loading, setLoading] = useState(true);
+  const { language } = useAppContext(); // Assuming this exists in context
+
+  const fetchQuote = async () => {
+    try {
+      setLoading(true);
+      
+      // Calculate day of the year to use as a seed for the random quote
+      const now = new Date();
+      const start = new Date(now.getFullYear(), 0, 0);
+      const diff = (now.getTime() - start.getTime()) + ((start.getTimezoneOffset() - now.getTimezoneOffset()) * 60 * 1000);
+      const oneDay = 1000 * 60 * 60 * 24;
+      const dayOfYear = Math.floor(diff / oneDay);
+
+      // Get count of quotes
+      const { count } = await supabase.from('quotes').select('*', { count: 'exact', head: true });
+      const totalQuotes = count || 60;
+      
+      // Select quote based on day of year
+      const quoteIndex = (dayOfYear % totalQuotes) + 1; // 1-indexed for SERIAL ID
+
+      const { data: quote, error } = await supabase
+        .from('quotes')
+        .select('*')
+        .eq('id', quoteIndex)
+        .single();
+
+      if (error) throw error;
+
+      if (quote) {
+        setData({
+          text: language === 'ar' ? quote.text_ar : quote.text_en,
+          author: quote.author
+        });
+      }
+    } catch (err) {
+      console.error('Error fetching quote:', err);
+      // Fallback
+      setData({ text: "Success is not final, failure is not fatal.", author: "Winston Churchill" });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchQuote = () => {
-      setData("The leading rule for the lawyer, as for the man of every calling, is diligence.");
-      setLoading(false);
-    };
     fetchQuote();
-  }, []);
+  }, [language]);
 
-  return { data, loading, isLoading: loading };
+  return { data, loading, isLoading: loading, refetch: fetchQuote };
 };
 
 export const useCompleteHabit = () => {
@@ -187,11 +220,12 @@ export const useCompleteHabit = () => {
 
       if (error) {
         console.warn('RPC complete_habit failed, falling back to manual update', error);
-        
+
         const { error: logError } = await supabase.from('habit_logs').insert({
           habit_id: id,
           user_id: user.id,
-          status: 'completed',
+          completed: true,
+          date: new Date().toISOString().split('T')[0],
           completed_at: new Date().toISOString()
         });
 
@@ -265,7 +299,7 @@ export const useUpdateTask = () => {
       // Handle subtasks using parentId logic from schema
       if (subtasks && subtasks.length > 0) {
         const { data: { user } } = await supabase.auth.getUser();
-        
+
         // This is a complex operation for a simple update, 
         // usually subtasks are updated individually or handled via a transaction/RPC
         // For simplicity, we ensure existing subtasks are linked to the parent
@@ -330,7 +364,7 @@ export const useCreateTask = () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const user = session?.user;
-      
+
       if (!user) throw new Error('User not found');
 
       const { subtasks, ...taskFields } = data;
@@ -359,7 +393,7 @@ export const useCreateTask = () => {
         const { error: subError } = await supabase
           .from('tasks')
           .insert(subtasksToInsert);
-        
+
         if (subError) console.error('Subtasks Integration Error:', subError);
       }
 
@@ -523,7 +557,7 @@ export const useCompleteTask = () => {
           .from('tasks')
           .update({ status: 'done', updated_at: new Date().toISOString() })
           .eq('id', id);
-        
+
         if (updateError) throw updateError;
       }
 
@@ -548,7 +582,7 @@ export const useRecordPomodoroSession = () => {
         setIsPending(false);
         return;
       }
-      
+
       const { error } = await supabase.from('pomodoro_sessions').insert({
         user_id: user.id,
         task_id: data.task_id || null,
@@ -567,4 +601,143 @@ export const useRecordPomodoroSession = () => {
   };
 
   return { mutate: recordPomodoro, isPending };
+};
+
+/**
+ * Custom hook for Pomodoro timer with sound effects
+ * @param initialMinutes - Initial time in minutes (default: 25)
+ */
+export const usePomodoro = (initialMinutes = 25) => {
+  const [timeLeft, setTimeLeft] = useState(initialMinutes * 60);
+  const [isActive, setIsActive] = useState(false);
+
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Audio references for sound effects
+  const clickSoundRef = useRef<HTMLAudioElement | null>(null);
+  const alarmSoundRef = useRef<HTMLAudioElement | null>(null);
+  const isAudioInitializedRef = useRef(false);
+
+  // Initialize audio elements
+  const initAudio = () => {
+    if (isAudioInitializedRef.current) return;
+
+    try {
+      clickSoundRef.current = new Audio('/sounds/click.mp3');
+      clickSoundRef.current.volume = 0.3;
+      clickSoundRef.current.preload = 'auto';
+
+      alarmSoundRef.current = new Audio('/sounds/alarm.mp3');
+      alarmSoundRef.current.volume = 0.5;
+      alarmSoundRef.current.preload = 'auto';
+
+      isAudioInitializedRef.current = true;
+    } catch (err) {
+      console.warn('Audio initialization failed:', err);
+    }
+  };
+
+  // Play click sound effect
+  const playClickSound = () => {
+    try {
+      initAudio();
+      if (clickSoundRef.current) {
+        clickSoundRef.current.currentTime = 0;
+        clickSoundRef.current.play().catch(() => {
+          // Ignore autoplay restrictions
+        });
+      }
+    } catch (err) {
+      // Silently fail for audio errors
+    }
+  };
+
+  // Play alarm sound effect
+  const playAlarmSound = () => {
+    try {
+      initAudio();
+      if (alarmSoundRef.current) {
+        alarmSoundRef.current.currentTime = 0;
+        alarmSoundRef.current.play().catch((err) => {
+          console.log('Alarm audio play error:', err);
+        });
+      }
+    } catch (err) {
+      console.warn('Alarm sound error:', err);
+    }
+  };
+
+  // Stop alarm sound
+  const stopAlarmSound = () => {
+    if (alarmSoundRef.current) {
+      alarmSoundRef.current.pause();
+      alarmSoundRef.current.currentTime = 0;
+    }
+  };
+
+  // Toggle timer with click sound
+  const toggleTimer = () => {
+    playClickSound();
+    setIsActive(!isActive);
+  };
+
+  // Reset timer with click sound
+  const resetTimer = () => {
+    playClickSound();
+    if (timerRef.current) clearInterval(timerRef.current);
+    setIsActive(false);
+    setTimeLeft(initialMinutes * 60);
+    stopAlarmSound();
+  };
+
+  // Timer effect
+  useEffect(() => {
+    if (isActive && timeLeft > 0) {
+      timerRef.current = setInterval(() => {
+        setTimeLeft((prev) => prev - 1);
+      }, 1000);
+    } else if (timeLeft === 0) {
+      if (timerRef.current) clearInterval(timerRef.current);
+      setIsActive(false);
+      playAlarmSound();
+    }
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isActive, timeLeft]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      stopAlarmSound();
+    };
+  }, []);
+
+  // Format time as MM:SS
+  const formatTime = () => {
+    const minutes = Math.floor(timeLeft / 60);
+    const seconds = timeLeft % 60;
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  // Set time in seconds
+  const setTime = (seconds: number) => {
+    setTimeLeft(seconds);
+  };
+
+  return {
+    timeLeft,
+    isActive,
+    toggleTimer,
+    resetTimer,
+    formatTime,
+    setTime,
+    setIsActive,
+    setTimeLeft,
+    playClickSound,
+    playAlarmSound,
+    stopAlarmSound,
+  };
 };

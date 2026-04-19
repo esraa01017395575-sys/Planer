@@ -529,10 +529,11 @@ export const Tasks = ({ currentUser }: any) => {
                                   onKeyDown={(e) => {
                                     if (e.key === 'Enter' && quickAddTitle) {
                                       createTask({
-                                        title: quickAddTitle,
-                                        status: column.id,
-                                        priority: 'medium',
-                                        user_id: currentUser.id
+                                        data: {
+                                          title: quickAddTitle,
+                                          status: column.id,
+                                          priority: 'medium'
+                                        }
                                       }, {
                                         onSuccess: (newTask: any) => {
                                           setTasks([newTask, ...tasks]);

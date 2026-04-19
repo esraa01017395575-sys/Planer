@@ -8,6 +8,7 @@ import {
 import { GoogleGenAI } from "@google/genai";
 import { useAppContext } from '../context/AppContext';
 import { useGetTasks, useGetHabits, useGetDailySchedule, useCreateTask } from '../lib/hooks';
+import { supabase } from '../lib/supabase';
 
 const SYSTEM_INSTRUCTION = `
 You are AI Coach Pro, a high-performance life coach and productivity expert.
@@ -277,7 +278,7 @@ const ChatView = memo(({
 });
 
 export const Chat = () => {
-  const { addNotification } = useAppContext();
+  const { addNotification, t } = useAppContext();
   const { data: tasks } = useGetTasks();
   const { data: habits } = useGetHabits();
   const { data: schedule } = useGetDailySchedule();
@@ -301,6 +302,33 @@ export const Chat = () => {
     scrollToBottom();
   }, [messages, isLoading, suggestedTasks]);
 
+  const fetchChatHistory = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: history, error } = await supabase
+        .from('ai_conversations')
+        .select('*')
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+      if (history && history.length > 0) {
+        setMessages(history.map(m => ({
+          role: m.role === 'assistant' ? 'model' : 'user',
+          content: m.content,
+          timestamp: new Date(m.created_at)
+        })));
+      }
+    } catch (err) {
+      console.error('Error fetching history:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchChatHistory();
+  }, []);
+
   const handleSendMessage = async () => {
     if ((!inputMessage.trim() && !attachedFile) || isLoading) return;
 
@@ -308,54 +336,130 @@ export const Chat = () => {
     const currentFile = attachedFile;
     setInputMessage('');
     setAttachedFile(null);
-    setMessages(prev => [...prev, { role: 'user', content: userMessage, timestamp: new Date(), file: currentFile }]);
+    
+    const newUserMsg: Message = { role: 'user', content: userMessage, timestamp: new Date(), file: currentFile };
+    setMessages(prev => [...prev, newUserMsg]);
     setIsLoading(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY || '' });
+      const { data: { session } } = await supabase.auth.getSession();
       
-      const context = `
-        Current Tasks: ${JSON.stringify(tasks?.map(t => ({ title: t.title, status: t.status })))}
-        Current Habits: ${JSON.stringify(habits?.map(h => ({ name: h.name, streak: h.current_streak })))}
-        Today's Schedule: ${JSON.stringify(schedule?.map(s => ({ title: s.task?.title, time: s.start_time })))}
-      `;
-
-      let parts = [{ text: SYSTEM_INSTRUCTION + "\n\nUser Context:\n" + context + "\n\nUser Message: " + userMessage }];
-
-      if (currentFile) {
-        // Need to read file as base64
-        const fileBase64 = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.readAsDataURL(currentFile);
-          reader.onload = () => resolve((reader.result as string).split(',')[1]);
-        });
-        
-        parts.push({
-          inlineData: {
-            data: fileBase64,
-            mimeType: currentFile.type
-          }
-        } as any);
-      }
-
-      const response = await ai.models.generateContent({
-        model: "gemini-1.5-flash",
-        contents: parts as any
+      // Save user message to DB
+      await supabase.from('ai_conversations').insert({
+        user_id: session?.user.id,
+        role: 'user',
+        content: userMessage
       });
 
-      const aiResponse = response.text || 'عذراً، لم أستطع معالجة طلبك.';
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`,
+          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY
+        },
+        body: JSON.stringify({
+          messages: messages.concat(newUserMsg).map(m => ({ role: m.role === 'model' ? 'assistant' : 'user', content: m.content })),
+          language,
+          context: {
+            tasks: tasks?.map(t => ({ title: t.title, status: t.status })),
+            habits: habits?.map(h => ({ name: h.name, streak: h.current_streak }))
+          }
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to connect to AI');
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let assistantContent = '';
+      let toolArguments = '';
+      let isToolCall = false;
       
-      setMessages(prev => [...prev, { role: 'model', content: aiResponse, timestamp: new Date() }]);
-      
-      // Simple heuristic for tasks
-      if (aiResponse.includes('- ') || aiResponse.includes('Task:')) {
-         // This is a naive extraction for demonstration.
-         // A structured output API call would be better for real use cases.
+      setMessages(prev => [...prev, { role: 'model', content: '', timestamp: new Date() }]);
+
+      while (true) {
+        const { done, value } = await reader!.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
+        
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          if (!trimmedLine || trimmedLine === 'data: [DONE]') continue;
+          
+          if (trimmedLine.startsWith('data: ')) {
+            try {
+              const jsonStr = trimmedLine.slice(6);
+              const data = JSON.parse(jsonStr);
+              const delta = data.choices?.[0]?.delta;
+
+              // Handle normal text content
+              if (delta?.content) {
+                assistantContent += delta.content;
+                setMessages(prev => {
+                  const newMessages = [...prev];
+                  newMessages[newMessages.length - 1].content = assistantContent;
+                  return newMessages;
+                });
+              }
+
+              // Handle Tool Calls (suggest_tasks)
+              if (delta?.tool_calls) {
+                isToolCall = true;
+                const tc = delta.tool_calls[0];
+                if (tc.function?.arguments) {
+                  toolArguments += tc.function.arguments;
+                }
+              }
+              
+            } catch (e) {
+              console.warn('Stream parse error:', e);
+            }
+          }
+        }
       }
+
+      // If a tool call was detected, parse the full arguments
+      if (isToolCall && toolArguments) {
+        try {
+          const parsedArgs = JSON.parse(toolArguments);
+          if (parsedArgs.tasks) {
+            setSuggestedTasks(parsedArgs.tasks.map((t: any, i: number) => ({
+              ...t,
+              id: `sug-${Date.now()}-${i}`,
+              subTasks: t.subTasks || []
+            })));
+            
+            // Add a friendly confirmation message if the AI didn't provide text
+            if (!assistantContent) {
+              const confirmMsg = language === 'ar' 
+                ? 'لقد جهزت لك بعض المهام المقترحة بناءً على حديثنا. هل ترغب في إضافتها؟'
+                : 'I have prepared some suggested tasks based on our conversation. Would you like to add them?';
+              
+              setMessages(prev => {
+                const next = [...prev];
+                next[next.length - 1].content = confirmMsg;
+                return next;
+              });
+            }
+          }
+        } catch (e) {
+          console.error('Failed to parse tool arguments:', e);
+        }
+      }
+
+      // Save assistant message to DB after stream finishes
+      await supabase.from('ai_conversations').insert({
+        user_id: session?.user.id,
+        role: 'assistant',
+        content: assistantContent
+      });
 
     } catch (error) {
       console.error('Chat Error:', error);
-      addNotification('فشل الاتصال بالمدرب الذكي', 'error');
+      addNotification(t('ai_connect_failed') || 'Failed to connect to AI Coach', 'error');
     } finally {
       setIsLoading(false);
     }
