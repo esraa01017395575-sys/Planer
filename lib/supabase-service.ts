@@ -211,6 +211,7 @@ export const taskService = {
         source: source || 'ai_suggested',
         estimated_min: estimated_min ?? 25,
         goal_id: goal_id ?? null,
+        daily_schedule: true, // Mark as daily schedule since it's being planned for a specific time/date
       })
       .select('*')
       .single();

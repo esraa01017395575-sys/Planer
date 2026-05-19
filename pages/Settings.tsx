@@ -5,10 +5,17 @@ import {
   Moon, Sun, Monitor, Bell, Globe, 
   Palette, User, Shield, LogOut, ChevronRight 
 } from 'lucide-react';
-import { AppShell } from '../components/layout/AppShell';
+import { supabase } from '../lib/supabase';
+import { useLocation } from 'wouter';
 
 export const Settings = () => {
   const { t, language, setLanguage, theme, setTheme, mode, toggleMode } = useAppContext();
+  const [, setLocation] = useLocation();
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setLocation('/');
+  };
 
   const themes = [
     { id: 'midnight', name: 'Midnight Purple', color: '#7C5CFC' },
@@ -106,7 +113,10 @@ export const Settings = () => {
             </div>
           </section>
           
-          <button className="w-full py-4 rounded-2xl bg-red-500/10 text-red-500 font-bold hover:bg-red-500 hover:text-white transition-all flex items-center justify-center gap-2 border border-red-500/20 shadow-lg shadow-red-500/5">
+          <button 
+            onClick={handleLogout}
+            className="w-full py-4 rounded-2xl bg-red-500/10 text-red-500 font-bold hover:bg-red-500 hover:text-white transition-all flex items-center justify-center gap-2 border border-red-500/20 shadow-lg shadow-red-500/5"
+          >
             <LogOut className="w-5 h-5" />
             Logout Account
           </button>
@@ -116,3 +126,5 @@ export const Settings = () => {
     </div>
   );
 };
+
+export default Settings;

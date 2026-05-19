@@ -16,17 +16,19 @@ export const useGetDailySchedule = (options?: { date?: string }) => {
 
     const dateFilter = options?.date || new Date().toISOString().split('T')[0];
     
-    // Join with tasks to get titles and metadata
-    const { data: schedule, error } = await supabase
-      .from('daily_schedule')
-      .select('*, task:tasks(*)')
+    // Fetch tasks where daily_schedule matches the filtered date
+    const { data: tasks, error } = await supabase
+      .from('tasks')
+      .select('*')
       .eq('user_id', user.id)
-      .eq('date_str', dateFilter); // Using date_str from schema if available, or fallback to your current schema logic
+      .eq('daily_schedule', dateFilter)
+      .order('scheduled_time');
 
     if (error) {
       console.error('Error fetching schedule:', error);
     } else {
-      setData(schedule || []);
+      // Map to the same structure expected by the UI (wrapping task)
+      setData(tasks?.map(t => ({ task: t, id: t.id, start_time: t.scheduled_time })) || []);
     }
     setLoading(false);
   };
@@ -60,7 +62,6 @@ export const useGetHabits = () => {
           habit_logs (
             id,
             completed_at,
-            status,
             xp_earned
           )
         `)
@@ -121,28 +122,27 @@ export const useGetTasks = () => {
         return;
       }
 
-      // Fetch all tasks for the user to build hierarchy in-memory
+      // Fetch root tasks and their subtasks via join
       const { data: allTasks, error } = await supabase
         .from('tasks')
-        .select('*')
+        .select(`
+          *,
+          subtasks (*)
+        `)
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
       if (error) {
         console.error('Error fetching tasks:', error);
       } else if (allTasks) {
-        // Build hierarchy: root tasks (parentId is null) with their children
-        const topLevelTasks = allTasks.filter(t => !t.parentId);
-        const tasksWithHierarchy = topLevelTasks.map(task => {
-          const children = allTasks.filter(t => t.parentId === task.id);
-          return {
-            ...task,
-            subtasks: children.map(c => ({
-              ...c,
-              completed: c.status === 'done' || c.is_done // Support both flags for UI compatibility
-            }))
-          };
-        });
+        // Map results to hierarchy expected by UI
+        const tasksWithHierarchy = allTasks.map(task => ({
+          ...task,
+          subtasks: (task.subtasks || []).map((c: any) => ({
+            ...c,
+            completed: c.status === 'done' || c.is_done // Support both flags for UI compatibility
+          }))
+        }));
         setData(tasksWithHierarchy);
       }
     } catch (err) {
@@ -164,9 +164,42 @@ export const useGetDailyQuote = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchQuote = () => {
-      setData("The leading rule for the lawyer, as for the man of every calling, is diligence.");
-      setLoading(false);
+    const fetchQuote = async () => {
+      try {
+        setLoading(true);
+        const { data: quotes, error } = await supabase
+          .from('quotes')
+          .select('text')
+          .limit(10); // Get a pool and pick one (simplified daily logic)
+
+        if (!error && quotes && quotes.length > 0) {
+          // Select one based on day of year
+          const dayOfYear = Math.floor((new Date().getTime() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
+          const index = dayOfYear % quotes.length;
+          setData(quotes[index].text);
+        } else {
+          // Fallback pool
+          const fallbacks = [
+            "Your future is created by what you do today, not tomorrow.",
+            "Focus on being productive instead of busy.",
+            "The secret of getting ahead is getting started.",
+            "Efficiency is doing things right; effectiveness is doing the right things.",
+            "It is not daily increase, but daily decrease. Hack away at the unessential.",
+            "Productivity is never an accident. It is always the result of a commitment to excellence.",
+            "Done is better than perfect.",
+            "Design your day, before it designs you.",
+            "Action is the foundational key to all success.",
+            "Discipline is choosing between what you want now and what you want most."
+          ];
+          const dayOfYear = Math.floor((new Date().getTime() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
+          setData(fallbacks[dayOfYear % fallbacks.length]);
+        }
+      } catch (err) {
+        console.error('Error fetching quote:', err);
+        setData("The leading rule for the lawyer, as for the man of every calling, is diligence.");
+      } finally {
+        setLoading(false);
+      }
     };
     fetchQuote();
   }, []);
@@ -191,7 +224,6 @@ export const useCompleteHabit = () => {
         const { error: logError } = await supabase.from('habit_logs').insert({
           habit_id: id,
           user_id: user.id,
-          status: 'completed',
           completed_at: new Date().toISOString()
         });
 
@@ -262,26 +294,32 @@ export const useUpdateTask = () => {
 
       if (error) throw error;
 
-      // Handle subtasks using parentId logic from schema
-      if (subtasks && subtasks.length > 0) {
-        const { data: { user } } = await supabase.auth.getUser();
-        
-        // This is a complex operation for a simple update, 
-        // usually subtasks are updated individually or handled via a transaction/RPC
-        // For simplicity, we ensure existing subtasks are linked to the parent
+      // Handle subtasks using subtasks table
+      if (subtasks && Array.isArray(subtasks)) {
+        // 1. Get current subtask IDs from database to identify removals
+        const { data: currentSubs } = await supabase.from('subtasks').select('id').eq('task_id', id);
+        const currentIds = currentSubs?.map(s => s.id) || [];
+        const incomingIds = subtasks.filter(st => st.id && st.id.length > 20).map(st => st.id);
+        const idsToDelete = currentIds.filter(cid => !incomingIds.includes(cid));
+
+        if (idsToDelete.length > 0) {
+          await supabase.from('subtasks').delete().in('id', idsToDelete);
+        }
+
+        // 2. Update existing and insert new
         for (const st of subtasks) {
-          if (st.id && !st.id.toString().includes('.')) { // Check if it's a real DB ID
-            await supabase.from('tasks').update({
-              status: st.is_done || st.completed ? 'done' : (st.status || 'todo'),
-              parentId: id
+          const isUuid = st.id && typeof st.id === 'string' && st.id.includes('-');
+          if (isUuid) { 
+            await supabase.from('subtasks').update({
+              is_done: st.completed || st.is_done || false,
+              title: st.title
             }).eq('id', st.id);
           } else {
-            // New subtask
-            await supabase.from('tasks').insert({
+            // New subtask (temp ID or no ID)
+            await supabase.from('subtasks').insert({
               title: st.title,
-              parentId: id,
-              user_id: user?.id,
-              status: st.is_done || st.completed ? 'done' : 'todo'
+              task_id: id,
+              is_done: st.completed || st.is_done || false
             });
           }
         }
@@ -325,7 +363,7 @@ export const useDeleteTask = () => {
 export const useCreateTask = () => {
   const [isPending, setIsPending] = useState(false);
 
-  const createTask = async ({ data }: { data: any }, options?: { onSuccess?: () => void, onError?: (error: any) => void }) => {
+  const createTask = async ({ data }: { data: any }, options?: { onSuccess?: (data?: any) => void, onError?: (error: any) => void }) => {
     setIsPending(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -347,23 +385,22 @@ export const useCreateTask = () => {
 
       if (error) throw error;
 
-      // Handle subtasks using parentId logic
+      // Handle subtasks using subtasks table
       if (subtasks && subtasks.length > 0 && newTask) {
         const subtasksToInsert = subtasks.map((st: any) => ({
-          parentId: newTask.id,
-          user_id: user.id,
+          task_id: newTask.id,
           title: typeof st === 'string' ? st : st.title,
-          status: st.completed || st.is_done ? 'done' : 'todo'
+          is_done: st.completed || st.is_done || false
         }));
 
         const { error: subError } = await supabase
-          .from('tasks')
+          .from('subtasks')
           .insert(subtasksToInsert);
         
         if (subError) console.error('Subtasks Integration Error:', subError);
       }
 
-      if (options?.onSuccess) options.onSuccess();
+      if (options?.onSuccess) options.onSuccess(newTask);
     } catch (err: any) {
       console.error('Create Task Catch Error:', err);
       if (options?.onError) options.onError(err);
@@ -379,16 +416,23 @@ export const useGetNotes = () => {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchNotes = async () => {
-    setLoading(true);
+  const fetchNotes = async (silent = false) => {
+    if (!silent) setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) {
+      if (!silent) setLoading(false);
+      return;
+    }
 
     const { data: notes, error } = await supabase
       .from('notes')
-      .select('*')
+      .select(`
+        *,
+        note_sections (id, name)
+      `)
       .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
+      .order('is_pinned', { ascending: false })
+      .order('updated_at', { ascending: false });
 
     if (!error) setData(notes);
     setLoading(false);
@@ -404,7 +448,7 @@ export const useGetNotes = () => {
 export const useCreateNote = () => {
   const [isPending, setIsPending] = useState(false);
 
-  const createNote = async ({ data }: { data: any }, options?: { onSuccess?: () => void, onError?: () => void }) => {
+  const createNote = async ({ data }: { data: any }, options?: { onSuccess?: () => void, onError?: (err: any) => void }) => {
     setIsPending(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -412,13 +456,15 @@ export const useCreateNote = () => {
 
       const { error } = await supabase.from('notes').insert({
         ...data,
-        user_id: user.id
+        user_id: user.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       });
 
       if (error) throw error;
       if (options?.onSuccess) options.onSuccess();
-    } catch (err) {
-      if (options?.onError) options.onError();
+    } catch (err: any) {
+      if (options?.onError) options.onError(err);
     } finally {
       setIsPending(false);
     }
@@ -429,18 +475,21 @@ export const useCreateNote = () => {
 
 export const useUpdateNote = () => {
   const [isPending, setIsPending] = useState(false);
-  const updateNote = async ({ id, data }: { id: string, data: any }, options?: { onSuccess?: () => void, onError?: () => void }) => {
+  const updateNote = async ({ id, data }: { id: string, data: any }, options?: { onSuccess?: () => void, onError?: (err: any) => void }) => {
     setIsPending(true);
     try {
       const { error } = await supabase
         .from('notes')
-        .update(data)
+        .update({
+          ...data,
+          updated_at: new Date().toISOString()
+        })
         .eq('id', id);
 
       if (error) throw error;
       if (options?.onSuccess) options.onSuccess();
-    } catch (err) {
-      if (options?.onError) options.onError();
+    } catch (err: any) {
+      if (options?.onError) options.onError(err);
     } finally {
       setIsPending(false);
     }
@@ -535,4 +584,574 @@ export const useCompleteTask = () => {
   };
 
   return { mutate: completeTask };
+};
+
+export const useRecordPomodoroSession = () => {
+  const [isPending, setIsPending] = useState(false);
+
+  const recordPomodoro = async (data: { task_id?: string; duration_minutes: number }, options?: { onSuccess?: () => void, onError?: (err: any) => void }) => {
+    setIsPending(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setIsPending(false);
+        return;
+      }
+      
+      const { error } = await supabase.from('pomodoro_sessions').insert({
+        user_id: user.id,
+        task_id: data.task_id || null,
+        duration_minutes: data.duration_minutes,
+        completed_at: new Date().toISOString()
+      });
+
+      if (error) throw error;
+      if (options?.onSuccess) options.onSuccess();
+    } catch (err: any) {
+      console.error('Pomodoro Insert Error:', err);
+      if (options?.onError) options.onError(err);
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  return { mutate: recordPomodoro, isPending };
+};
+
+export const useDeleteHabit = () => {
+  const [isPending, setIsPending] = useState(false);
+  const deleteHabit = async ({ id }: { id: string }, options?: { onSuccess?: () => void, onError?: (error: any) => void }) => {
+    setIsPending(true);
+    try {
+      const { error } = await supabase.from('habits').delete().eq('id', id);
+      if (error) throw error;
+      if (options?.onSuccess) options.onSuccess();
+    } catch (err: any) {
+      console.error('Delete Habit Error:', err);
+      if (options?.onError) options.onError(err);
+    } finally {
+      setIsPending(false);
+    }
+  };
+  return { mutate: deleteHabit, isPending };
+};
+
+export const useUpdateHabit = () => {
+  const [isPending, setIsPending] = useState(false);
+  const updateHabit = async ({ id, data }: { id: string, data: any }, options?: { onSuccess?: () => void, onError?: (error: any) => void }) => {
+    setIsPending(true);
+    try {
+      const { error } = await supabase.from('habits').update(data).eq('id', id);
+      if (error) throw error;
+      if (options?.onSuccess) options.onSuccess();
+    } catch (err: any) {
+      console.error('Update Habit Error:', err);
+      if (options?.onError) options.onError(err);
+    } finally {
+      setIsPending(false);
+    }
+  };
+  return { mutate: updateHabit, isPending };
+};
+
+export const useGetGoals = () => {
+  const [data, setData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchGoals = async () => {
+    try {
+      setLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setLoading(false);
+        return;
+      }
+
+      const { data: goals, error } = await supabase
+        .from('goals')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching goals:', error);
+      } else {
+        setData(goals || []);
+      }
+    } catch (err) {
+      console.error('Unexpected error in fetchGoals:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchGoals();
+  }, []);
+
+  return { data, loading, isLoading: loading, refetch: fetchGoals };
+};
+
+export const useCreateGoal = () => {
+  const [isPending, setIsPending] = useState(false);
+
+  const createGoal = async ({ data }: { data: any }, options?: { onSuccess?: (data: any) => void, onError?: (error: any) => void }) => {
+    setIsPending(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('User not found');
+
+      const { data: insertedData, error } = await supabase.from('goals').insert({
+        ...data,
+        user_id: user.id,
+        created_at: new Date().toISOString()
+      }).select().single();
+
+      if (error) throw error;
+      if (options?.onSuccess && typeof options.onSuccess === 'function') {
+        (options.onSuccess as any)(insertedData);
+      }
+    } catch (err: any) {
+      console.error('Create Goal Error:', err);
+      if (options?.onError) options.onError(err);
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  return { mutate: createGoal, isPending };
+};
+
+export const useGetPlanMilestones = (planId: string) => {
+  const [data, setData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchMilestones = async () => {
+    if (!planId) return;
+    setLoading(true);
+    const { data: milestones, error } = await supabase
+      .from('plan_milestones')
+      .select('*')
+      .eq('plan_id', planId)
+      .order('order_index', { ascending: true });
+
+    if (!error) setData(milestones || []);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchMilestones();
+  }, [planId]);
+
+  return { data, loading, refetch: fetchMilestones };
+};
+
+export const useCreateMilestone = () => {
+  const [isPending, setIsPending] = useState(false);
+  const createMilestone = async (data: any) => {
+    setIsPending(true);
+    try {
+      const { error } = await supabase.from('plan_milestones').insert(data);
+      if (error) throw error;
+    } finally {
+      setIsPending(false);
+    }
+  };
+  return { mutateAsync: createMilestone, isPending };
+};
+
+export const useUpdateGoal = () => {
+  const [isPending, setIsPending] = useState(false);
+  const updateGoal = async ({ id, data }: { id: string, data: any }, options?: { onSuccess?: () => void, onError?: (error: any) => void }) => {
+    setIsPending(true);
+    try {
+      const { error } = await supabase
+        .from('goals')
+        .update({
+          ...data,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id);
+
+      if (error) throw error;
+      if (options?.onSuccess) options.onSuccess();
+    } catch (err: any) {
+      console.error('Update Goal Error:', err);
+      if (options?.onError) options.onError(err);
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  return { mutate: updateGoal, isPending };
+};
+
+export const useDeleteGoal = () => {
+  const [isPending, setIsPending] = useState(false);
+  const deleteGoal = async ({ id }: { id: string }, options?: { onSuccess?: () => void, onError?: (error: any) => void }) => {
+    setIsPending(true);
+    try {
+      const { error } = await supabase
+        .from('goals')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      if (options?.onSuccess) options.onSuccess();
+    } catch (err: any) {
+      console.error('Delete Goal Error:', err);
+      if (options?.onError) options.onError(err);
+    } finally {
+      setIsPending(false);
+    }
+  };
+  return { mutate: deleteGoal, isPending };
+};
+
+export const useGetNoteSections = () => {
+  const [data, setData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchSections = async () => {
+    setLoading(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data: sections, error } = await supabase
+      .from('note_sections')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('name');
+
+    if (!error) setData(sections || []);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchSections();
+  }, []);
+
+  return { data, loading, refetch: fetchSections };
+};
+
+export const useCreateNoteSection = () => {
+  const [isPending, setIsPending] = useState(false);
+
+  const createSection = async ({ name }: { name: string }, options?: { onSuccess?: () => void, onError?: (err: any) => void }) => {
+    setIsPending(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('User not found');
+
+      const { error } = await supabase.from('note_sections').insert({
+        name,
+        user_id: user.id
+      });
+
+      if (error) throw error;
+      if (options?.onSuccess) options.onSuccess();
+    } catch (err: any) {
+      if (options?.onError) options.onError(err);
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  return { mutate: createSection, isPending };
+};
+
+export const useGetFavorites = () => {
+  const [data, setData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchFavorites = async () => {
+    try {
+      setLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setLoading(false);
+        return;
+      }
+
+      const { data: favorites, error } = await supabase
+        .from('favorites')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching favorites:', error);
+      } else {
+        setData(favorites || []);
+      }
+    } catch (err) {
+      console.error('Unexpected error in fetchFavorites:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchFavorites();
+  }, []);
+
+  return { data, loading, isLoading: loading, refetch: fetchFavorites };
+};
+
+export const useToggleFavorite = () => {
+  const [isPending, setIsPending] = useState(false);
+
+  const toggleFavorite = async (item: any, customContent?: string) => {
+    setIsPending(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
+      if (!user) throw new Error('يرجى تسجيل الدخول أولاً');
+
+      const sourceId = item.item_id || item.id;
+      if (!sourceId) throw new Error('Source ID is required');
+
+      // Check if it's already favorited by checking source_id
+      const { data: existing, error: fetchError } = await supabase
+        .from('favorites')
+        .select('id, content')
+        .eq('user_id', user.id)
+        .eq('source_id', sourceId)
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+
+      if (existing) {
+        if (customContent !== undefined) {
+          // Only update if content actually changed
+          if (existing.content === customContent) return { added: true, record: existing };
+          
+          const { error: updateError } = await supabase
+            .from('favorites')
+            .update({ content: customContent })
+            .eq('id', existing.id);
+          if (updateError) throw updateError;
+          return { added: true, record: { ...existing, content: customContent }, updated: true };
+        } else {
+          const { error: deleteError } = await supabase
+            .from('favorites')
+            .delete()
+            .eq('id', existing.id);
+          if (deleteError) throw deleteError;
+          return { added: false };
+        }
+      } else {
+        // If we're trying to add a reflection but the content is empty, maybe don't add it as a favorite yet?
+        // Actually, let's just add it.
+        const { data: newFav, error: insertError } = await supabase.from('favorites').insert({
+          user_id: user.id,
+          source_type: item.type || 'manual',
+          source_id: sourceId,
+          title: item.title || 'Untitled',
+          content: customContent || item.content || item.description || '',
+          metadata: item.metadata || {},
+          created_at: new Date().toISOString()
+        }).select().single();
+        if (insertError) throw insertError;
+        return { added: true, record: newFav };
+      }
+    } catch (err: any) {
+      console.error('Toggle Favorite Error Detail:', err);
+      throw err;
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  return { toggleFavorite, isPending };
+};
+
+export const useDeleteFavorite = () => {
+  const [isPending, setIsPending] = useState(false);
+  const deleteFavorite = async (id: string) => {
+    setIsPending(true);
+    try {
+      const { error } = await supabase.from('favorites').delete().eq('id', id);
+      if (error) throw error;
+    } finally {
+      setIsPending(false);
+    }
+  };
+  return { mutate: deleteFavorite, isPending };
+};
+
+export const useUpdateFavorite = () => {
+  const [isPending, setIsPending] = useState(false);
+  const updateFavorite = async (id: string, data: any) => {
+    setIsPending(true);
+    try {
+      const { error } = await supabase.from('favorites').update(data).eq('id', id);
+      if (error) throw error;
+    } finally {
+      setIsPending(false);
+    }
+  };
+  return { mutate: updateFavorite, isPending };
+};
+
+export const useGetChatSessions = () => {
+  const [data, setData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchSessions = async () => {
+    setLoading(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data: sessions, error } = await supabase
+      .from('chat_sessions')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('updated_at', { ascending: false });
+
+    if (!error) setData(sessions || []);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchSessions();
+  }, []);
+
+  return { data, loading, refetch: fetchSessions };
+};
+
+export const useCreateChatSession = () => {
+  const [isPending, setIsPending] = useState(false);
+  const createSession = async ({ title }: { title: string }, options?: { onSuccess?: (data: any) => void }) => {
+    setIsPending(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data, error } = await supabase.from('chat_sessions').insert({
+      user_id: user.id,
+      title,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }).select().single();
+
+    if (!error && options?.onSuccess) options.onSuccess(data);
+    setIsPending(false);
+  };
+  return { mutate: createSession, isPending };
+};
+
+export const useUpdateChatSession = () => {
+  const updateSession = async (id: string, title: string) => {
+    await supabase.from('chat_sessions').update({ title, updated_at: new Date().toISOString() }).eq('id', id);
+  };
+  return { mutate: updateSession };
+};
+
+export const useDeleteChatSession = () => {
+  const deleteSession = async (id: string) => {
+    await supabase.from('chat_sessions').delete().eq('id', id);
+  };
+  return { mutate: deleteSession };
+};
+
+export const useGetChatMessages = (sessionId: string | null) => {
+  const [data, setData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const fetchMessages = async () => {
+    if (!sessionId) {
+      setData([]);
+      return;
+    }
+    setLoading(true);
+    const { data: messages, error } = await supabase
+      .from('chat_messages')
+      .select('*')
+      .eq('session_id', sessionId)
+      .order('created_at', { ascending: true });
+
+    if (!error) setData(messages || []);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchMessages();
+  }, [sessionId]);
+
+  return { data, loading, refetch: fetchMessages };
+};
+
+export const useSaveChatMessage = () => {
+  const saveMessage = async (sessionId: string, role: 'user' | 'model', content: string) => {
+    await supabase.from('chat_messages').insert({
+      session_id: sessionId,
+      role,
+      content,
+      created_at: new Date().toISOString()
+    });
+    // Update session timestamp
+    await supabase.from('chat_sessions').update({ updated_at: new Date().toISOString() }).eq('id', sessionId);
+  };
+  return { mutate: saveMessage };
+};
+
+export const useGetNotifications = () => {
+  const [data, setData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchNotifications = async () => {
+    setLoading(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data: notifications, error } = await supabase
+      .from('user_notifications')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
+
+    if (!error) setData(notifications || []);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchNotifications();
+  }, []);
+
+  return { data, loading, refetch: fetchNotifications };
+};
+
+export const useMarkNotificationRead = () => {
+  const markRead = async (id: string) => {
+    await supabase.from('user_notifications').update({ is_read: true }).eq('id', id);
+  };
+  return { mutate: markRead };
+};
+
+export const useDeleteNotification = () => {
+  const deleteNotif = async (id: string) => {
+    await supabase.from('user_notifications').delete().eq('id', id);
+  };
+  return { mutate: deleteNotif };
+};
+
+export const useGetHabitLogs = (habitId: string) => {
+  const [data, setData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchLogs = async () => {
+      const { data: logs } = await supabase
+        .from('habit_logs')
+        .select('*')
+        .eq('habit_id', habitId)
+        .order('completed_at', { ascending: false });
+      
+      setData(logs || []);
+      setLoading(false);
+    };
+    fetchLogs();
+  }, [habitId]);
+
+  return { data, loading };
 };

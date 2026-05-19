@@ -1,12 +1,9 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-const apiKey = process.env.GEMINI_API_KEY;
+const apiKey = typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : undefined;
 
-if (!apiKey) {
-  console.error("GEMINI_API_KEY is not set");
-}
-
-export const ai = new GoogleGenAI({ apiKey: apiKey || "" });
+// Client-side initialization removed for security. Use server-side proxy instead.
+export const ai = null as any;
 
 export const suggestTasksTool = {
   name: "suggest_tasks",

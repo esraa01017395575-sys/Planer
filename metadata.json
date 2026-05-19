@@ -1,5 +1,8 @@
 {
+  "name": "AI Coach Pro",
   "description": "AI Coach Pro - Your personal AI career instructor and productivity companion with Kanban board, daily schedule, and AI chat.",
   "requestFramePermissions": [],
-  "name": "Tests doc V1***AI Coach Pro"
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

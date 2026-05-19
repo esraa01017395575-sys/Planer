@@ -1,280 +1,494 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAppContext } from '../context/AppContext';
-import { useGetHabits, useCompleteHabit, useCreateHabit } from '../lib/hooks';
-import { Flame, Activity, Sparkles, Plus, X, CheckCircle2, MoreVertical, Trophy, Target, Zap, Loader2, Check } from 'lucide-react';
+import { useGetHabits, useCompleteHabit, useCreateHabit, useDeleteHabit, useUpdateHabit } from '../lib/hooks';
+import { 
+  Plus, Flame, Trophy, X, Check, Loader2, Pencil, Trash2, Bell, BellOff,
+  Droplet, BookOpen, Dumbbell, Brain, Heart, Sun, Moon, Apple, Target,
+  PenLine, Footprints, Sparkles, type LucideIcon
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AppShell } from '../components/layout/AppShell';
 
-const LoadingState = ({ message }: { message: string }) => (
-  <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
-    <Loader2 className="w-10 h-10 text-accent animate-spin" />
-    <p className="text-text-secondary font-medium">{message}</p>
-  </div>
-);
+const CATEGORIES = ["health", "learning", "productivity", "mindful", "social"] as const;
+const FREQUENCIES = ["daily", "weekly"] as const;
+const REMINDER_OPTIONS = [60, 30, 15, 0] as const;
 
+const ICONS: { key: string; Icon: LucideIcon; color: string }[] = [
+  { key: "water",     Icon: Droplet,     color: "#5BA3D0" },
+  { key: "read",      Icon: BookOpen,    color: "#A88B6B" },
+  { key: "workout",   Icon: Dumbbell,    color: "#C96B5A" },
+  { key: "run",       Icon: Footprints,  color: "#D4A574" },
+  { key: "focus",     Icon: Target,      color: "#6B8A6E" },
+  { key: "write",     Icon: PenLine,     color: "#9B82CC" },
+  { key: "mind",      Icon: Brain,       color: "#E8927C" },
+  { key: "sleep",     Icon: Moon,        color: "#7B92B0" },
+  { key: "morning",   Icon: Sun,         color: "#E8B84A" },
+  { key: "diet",      Icon: Apple,       color: "#C96B5A" },
+  { key: "love",      Icon: Heart,       color: "#E84A6F" },
+  { key: "spark",     Icon: Sparkles,    color: "#9B82CC" },
+];
 
-const CATEGORIES = ['work', 'health', 'fitness', 'mindfulness', 'learning', 'social', 'financial'] as const;
-const EMOJIS = ['🧘', '💪', '📚', '🏃', '🎯', '✍️', '💧', '🌙', '☀️', '🍎', '🧠', '💰'];
+function iconFor(key: string) {
+  return ICONS.find((i) => i.key === key) ?? ICONS[4]; // Default to focus
+}
+
+interface HabitForm {
+  id?: string;
+  title: string;
+  icon: string;
+  category: typeof CATEGORIES[number];
+  frequency: typeof FREQUENCIES[number];
+  target_per_day: number;
+  xp_per_complete: number;
+  reminder_time: string;
+  reminders: number[];
+}
+
+const EMPTY_FORM: HabitForm = {
+  title: "", icon: "focus", category: "health", frequency: "daily",
+  target_per_day: 1, xp_per_complete: 20, reminder_time: "", reminders: [],
+};
+
+const Heatmap = ({ logs }: { logs: Set<string> }) => {
+  const days = Array.from({ length: 30 }, (_, i) => {
+    const d = new Date(); d.setDate(d.getDate() - (29 - i));
+    return d.toISOString().slice(0, 10);
+  });
+  return (
+    <div className="grid gap-1 mt-4" style={{ gridTemplateColumns: "repeat(30, 1fr)" }}>
+      {days.map((d) => (
+        <div key={d} title={d}
+          className={`aspect-square rounded-sm transition-colors ${logs.has(d) ? "bg-accent" : "bg-bg-secondary"}`} />
+      ))}
+    </div>
+  );
+};
 
 export const Habits = () => {
-  const { data: habits, loading: isLoading, refetch } = useGetHabits();
+  const { data: habitsData, loading: isLoading, refetch } = useGetHabits();
   const { mutate: completeHabit } = useCompleteHabit();
   const { mutate: createHabit, isPending: isCreating } = useCreateHabit();
-  const { addNotification, language } = useAppContext();
+  const { mutate: deleteHabit } = useDeleteHabit();
+  const { mutate: updateHabit } = useUpdateHabit();
+  const { addNotification, language, t } = useAppContext();
 
   const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState({
-    title: '',
-    description: '',
-    category: 'health' as typeof CATEGORIES[number],
-    emoji: '💪',
-    frequency: 'daily' as 'daily' | 'weekly',
-    target_count: 1,
-    xp_per_complete: 20,
-  });
+  const [form, setForm] = useState<HabitForm>(EMPTY_FORM);
+  const [confirmDel, setConfirmDel] = useState<any>(null);
 
-  const handleComplete = (id: string) => {
-    completeHabit({ id }, {
-      onSuccess: () => {
-        refetch();
-        addNotification(language === 'ar' ? 'تم تسجيل العادة بنجاح! +XP' : 'Habit logged successfully! +XP', 'success');
-      },
-      onError: () => addNotification(language === 'ar' ? 'فشل في تسجيل العادة' : 'Failed to log habit', 'error'),
-    });
-  };
+  const habits = habitsData || [];
 
-  const handleCreate = (e: React.FormEvent) => {
+  // Notification logic from reference
+  const fired = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    
+    if (Notification.permission === 'default') {
+        Notification.requestPermission();
+    }
+
+    const check = () => {
+      const now = new Date();
+      const todayKey = now.toISOString().slice(0, 10);
+      habits.forEach((h: any) => {
+        if (!h.reminder_time || !h.reminders || h.reminders.length === 0) return;
+        if (h.last_completed_on === todayKey) return;
+        
+        const [hh, mm] = h.reminder_time.split(":").map(Number);
+        const targetTime = new Date(now);
+        targetTime.setHours(hh, mm, 0, 0);
+        
+        h.reminders.forEach((mins: number) => {
+          const fireAt = new Date(targetTime.getTime() - mins * 60_000);
+          const key = `${h.id}:${todayKey}:${mins}`;
+          if (fired.current.has(key)) return;
+          
+          const diff = now.getTime() - fireAt.getTime();
+          if (diff >= 0 && diff < 120_000) {
+            const body = mins === 0 ? "It's time now!" : `Starts in ${mins} min`;
+            if (Notification.permission === "granted") {
+              new Notification(h.title, { body, tag: key });
+            }
+            addNotification(`${h.title} — ${body}`, 'info');
+            fired.current.add(key);
+          }
+        });
+      });
+    };
+    
+    const id = setInterval(check, 20_000);
+    return () => clearInterval(id);
+  }, [habits, addNotification]);
+
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.title.trim()) return;
 
-    // Mapping form fields to DB schema
-    const dbData = {
+    const payload = {
       title: form.title,
+      emoji: form.icon, // reusing emoji col for icon key
       category: form.category,
       frequency: form.frequency,
-      target_per_week: form.frequency === 'daily' ? 7 : form.target_count,
+      target_per_day: form.target_per_day,
       xp_per_complete: form.xp_per_complete,
+      reminder_time: form.reminder_time || null,
+      reminders: form.reminders,
       is_active: true
     };
 
-    createHabit(
-      { data: dbData },
-      {
+    if (form.id) {
+      updateHabit({ id: form.id, data: payload }, {
         onSuccess: () => {
-          addNotification(language === 'ar' ? `تم إنشاء العادة: ${form.title}` : `Habit created: ${form.title}`, 'success');
+          addNotification(t('note_saved'), 'success');
           setShowModal(false);
-          setForm({ title: '', description: '', category: 'health', emoji: '💪', frequency: 'daily', target_count: 1, xp_per_complete: 20 });
           refetch();
-        },
-        onError: () => addNotification(language === 'ar' ? 'فشل في إنشاء العادة' : 'Failed to create habit', 'error'),
-      }
-    );
+        }
+      });
+    } else {
+      createHabit({ data: payload }, {
+        onSuccess: () => {
+          addNotification(t('habit_created'), 'success');
+          setShowModal(false);
+          setForm(EMPTY_FORM);
+          refetch();
+        }
+      });
+    }
   };
 
-  if (isLoading) return <AppShell><LoadingState message="Loading habits..." /></AppShell>;
+  const handleComplete = (h: any) => {
+    completeHabit({ id: h.id }, {
+      onSuccess: () => {
+        refetch();
+        addNotification(t('habit_logged'), 'success');
+      }
+    });
+  };
 
-  const activeHabits = habits?.filter(h => h.is_active) || [];
-  const bestStreak = activeHabits.reduce((max, h) => Math.max(max, h.current_streak || 0), 0);
-  const completedToday = activeHabits.filter(h => (h as any).completed_today).length;
-  const weeklyPct = activeHabits.length > 0 ? Math.round((completedToday / activeHabits.length) * 100) : 0;
+  const openEdit = (h: any) => {
+    setForm({
+      id: h.id,
+      title: h.title,
+      icon: h.emoji || 'focus',
+      category: h.category as any,
+      frequency: h.frequency as any,
+      target_per_day: h.target_per_day || 1,
+      xp_per_complete: h.xp_per_complete || 20,
+      reminder_time: h.reminder_time?.slice(0, 5) || "",
+      reminders: h.reminders || []
+    });
+    setShowModal(true);
+  };
+
+  const todaysCount = (h: any) => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    return h.habit_logs?.filter((l: any) => l.completed_at?.split('T')[0] === todayStr).length || 0;
+  };
+
+  if (isLoading) return <div className="flex items-center justify-center min-h-[400px]"><Loader2 className="animate-spin" /></div>;
+
+  const bestStreak = habits.reduce((m, h) => Math.max(m, h.best_streak || 0), 0);
+  const doneCount = habits.filter(h => todaysCount(h) >= (h.target_per_day || 1)).length;
+  const progressPct = habits.length ? Math.round((doneCount / habits.length) * 100) : 0;
 
   return (
-    <AppShell>
-      <div className="space-y-8 max-w-5xl mx-auto">
-        <div className="flex items-center justify-between">
+    <div className="space-y-8 animate-in fade-in duration-700">
+      <header className="flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-3xl font-display font-bold">Habits</h1>
-            <p className="text-muted-foreground mt-1">Build consistency, level up your life.</p>
+            <h1 className="text-4xl font-display font-bold tracking-tight">{t('habits')}</h1>
+            <p className="text-sm text-text-secondary mt-1 font-medium italic opacity-70">"Consistency is the bridge between goals and accomplishment."</p>
           </div>
-          <button
-            onClick={() => setShowModal(true)}
-            className="flex items-center gap-2 bg-primary text-primary-foreground px-5 py-2.5 rounded-xl font-bold hover:shadow-lg hover:shadow-primary/25 transition-all active:scale-95"
+          <button 
+            onClick={() => { setForm(EMPTY_FORM); setShowModal(true); }}
+            className="flex items-center gap-2 bg-accent text-white px-6 py-3 rounded-2xl font-bold shadow-xl shadow-accent/20 hover:scale-[1.02] active:scale-95 transition-all"
           >
-            <Plus size={18} /> New Habit
+            <Plus size={20} /> {t('addHabit')}
           </button>
+        </header>
+
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-6 flex flex-col gap-1 ring-1 ring-white/5 shadow-2xl">
+            <span className="text-[10px] font-bold text-text-secondary uppercase tracking-widest opacity-60">Best Streak</span>
+            <div className="flex items-center gap-2">
+               <Flame className="text-orange-500 w-6 h-6" />
+               <span className="text-3xl font-display font-bold">{bestStreak}</span>
+            </div>
+          </motion.div>
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="glass-card p-6 flex flex-col gap-1 ring-1 ring-accent/10 border-accent/20">
+            <span className="text-[10px] font-bold text-accent uppercase tracking-widest">Today's Progress</span>
+            <div className="flex items-center justify-between">
+              <span className="text-3xl font-display font-bold">{progressPct}%</span>
+              <span className="text-sm font-bold text-text-secondary">{doneCount}/{habits.length}</span>
+            </div>
+          </motion.div>
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="glass-card p-6 flex flex-col gap-1">
+            <span className="text-[10px] font-bold text-text-secondary uppercase tracking-widest opacity-60">Active Habits</span>
+            <span className="text-3xl font-display font-bold">{habits.length}</span>
+          </motion.div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="glass-card p-6 flex flex-col items-center justify-center text-center">
-            <div className="w-12 h-12 rounded-full bg-accent/20 flex items-center justify-center text-accent mb-3">
-              <Flame size={24} />
+        {habits.length === 0 && (
+          <div className="glass-card p-20 flex flex-col items-center gap-6 text-center shadow-inner border-dashed">
+            <div>
+              <h3 className="text-xl font-bold">No routines established yet</h3>
+              <p className="text-text-secondary mt-2 max-w-sm">Start your journey today by creating a single meaningful habit.</p>
             </div>
-            <p className="text-3xl font-display font-bold text-foreground">{bestStreak}</p>
-            <p className="text-sm font-medium text-muted-foreground uppercase tracking-widest mt-1">Best Streak</p>
+            <button 
+               type="button"
+               onClick={() => setShowModal(true)}
+               className="bg-bg-secondary border border-border px-8 py-3 rounded-2xl font-bold hover:bg-border transition-all"
+            >
+              Start First Habit
+            </button>
           </div>
-          <div className="glass-card p-6 flex flex-col items-center justify-center text-center border-primary/30">
-            <div className="text-4xl font-display font-bold text-primary mb-2">{weeklyPct}%</div>
-            <p className="text-sm font-medium text-muted-foreground uppercase tracking-widest">Today's Progress</p>
-          </div>
-          <div className="glass-card p-6 flex flex-col items-center justify-center text-center">
-            <div className="text-4xl font-display font-bold text-foreground mb-2">{activeHabits.length}</div>
-            <p className="text-sm font-medium text-muted-foreground uppercase tracking-widest">Active Habits</p>
-          </div>
-        </div>
+        )}
 
-        <div className="space-y-4">
-          {activeHabits.length === 0 && (
-            <div className="glass-card p-12 flex flex-col items-center gap-4 text-center">
-              <div className="text-5xl">🎯</div>
-              <h3 className="text-xl font-bold">No habits yet</h3>
-              <p className="text-muted-foreground">Start building your daily routines for a better life.</p>
-              <button
-                onClick={() => setShowModal(true)}
-                className="bg-primary text-primary-foreground px-6 py-3 rounded-xl font-bold hover:bg-primary/90 transition-colors"
-              >
-                Create First Habit
-              </button>
-            </div>
-          )}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {habits.map((h: any, i: number) => {
+            const count = todaysCount(h);
+            const target = h.target_per_day || 1;
+            const progress = Math.min(100, Math.round((count / target) * 100));
+            const isDone = count >= target;
+            const habitLogs = new Set<string>(h.habit_logs?.map((l: any) => l.completed_at?.split('T')[0]).filter(Boolean) || []);
+            const { Icon, color } = iconFor(h.emoji || 'focus');
 
-          {activeHabits.map((habit) => {
-            const weekLogs: boolean[] = (habit as any).week_logs || Array(7).fill(false);
-            const completedToday = (habit as any).completed_today || false;
             return (
-              <div key={habit.id} className="glass-card p-5 flex flex-col md:flex-row items-center justify-between gap-6 hover:border-border transition-colors">
-                <div className="flex items-center gap-4 min-w-[250px]">
-                  <div className="w-14 h-14 rounded-2xl bg-secondary flex items-center justify-center text-2xl shadow-inner border border-border/50">
-                    {habit.emoji}
+              <motion.div 
+                key={h.id} 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: i * 0.05 }}
+                className="glass-card p-6 flex flex-col gap-4 group hover:ring-2 hover:ring-accent/20 transition-all border-border/40"
+              >
+                <div className="flex items-start gap-4">
+                  <div 
+                    className="w-16 h-16 rounded-3xl flex items-center justify-center shrink-0 shadow-inner group-hover:scale-110 transition-transform duration-500"
+                    style={{ backgroundColor: `${color}15` }}
+                  >
+                    <Icon style={{ color }} size={28} />
                   </div>
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-lg font-bold text-foreground">{habit.title}</h3>
-                      <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                        {habit.category}
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-xl font-bold text-text-primary truncate">{h.title}</h3>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-[10px] uppercase font-black tracking-tighter px-2 py-0.5 rounded-lg bg-bg-secondary text-text-secondary">
+                        {h.category || 'health'}
                       </span>
+                      <span className="text-[10px] font-bold text-text-secondary opacity-40">{h.frequency}</span>
+                      {target > 1 && <span className="text-[10px] font-bold text-accent">{target}×/day</span>}
                     </div>
-                    <div className="flex items-center gap-3 mt-1 text-sm">
-                      <span className="font-mono text-accent font-bold flex items-center gap-1">
-                        <Flame size={14} /> {habit.current_streak || 0} days
-                      </span>
-                      <span className="text-muted-foreground border-l border-border pl-3">+{habit.xp_per_complete} XP</span>
+                    <div className="flex items-center gap-3 mt-3 text-xs font-bold text-text-secondary">
+                       <span className="flex items-center gap-1"><Flame size={14} className="text-orange-500" /> {h.current_streak || 0} {t('streak')}</span>
+                       <span className="flex items-center gap-1 opacity-50"><Trophy size={14} /> {h.best_streak || 0}</span>
+                       <span className="text-accent">+20 XP</span>
+                       {h.reminder_time && (
+                         <span className="flex items-center gap-1 text-accent/70"><Bell size={12} /> {h.reminder_time?.slice(0, 5)}</span>
+                       )}
                     </div>
+                  </div>
+                  <div className="flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button type="button" onClick={() => openEdit(h)} className="p-2 hover:bg-bg-secondary rounded-xl text-text-secondary transition-colors"><Pencil size={14} /></button>
+                    <button type="button" onClick={() => setConfirmDel(h)} className="p-2 hover:bg-red-500/10 hover:text-red-500 rounded-xl text-text-secondary transition-colors"><Trash2 size={14} /></button>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, i) => (
-                    <div key={i} className="flex flex-col items-center gap-1.5">
-                      <span className="text-[10px] font-bold text-muted-foreground">{day}</span>
-                      <div className={`w-6 h-6 rounded-md border ${weekLogs[i] ? 'bg-primary border-primary shadow-[0_0_10px_var(--color-primary)] opacity-80' : 'bg-secondary border-border'}`} />
+                {target > 1 && (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-[10px] font-bold tracking-widest uppercase opacity-40">
+                      <span>Today</span>
+                      <span>{count}/{target}</span>
                     </div>
-                  ))}
-                </div>
+                    <div className="h-2 bg-bg-secondary rounded-full overflow-hidden">
+                      <motion.div 
+                        initial={{ width: 0 }}
+                        animate={{ width: `${progress}%` }}
+                        className="h-full bg-accent"
+                      />
+                    </div>
+                  </div>
+                )}
 
-                <div className="min-w-[140px] flex justify-end">
-                  {completedToday ? (
-                    <button disabled className="w-full flex items-center justify-center gap-2 bg-secondary text-muted-foreground py-3 rounded-xl font-bold cursor-not-allowed border border-border">
-                      <Check size={18} /> Done Today
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handleComplete(habit.id)}
-                      className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 text-primary-foreground py-3 rounded-xl font-bold shadow-lg shadow-primary/25 hover:shadow-xl hover:shadow-primary/30 transition-all active:scale-95"
-                    >
-                      Mark Done
-                    </button>
-                  )}
-                </div>
-              </div>
+                <Heatmap logs={habitLogs} />
+
+                <button
+                  type="button"
+                  onClick={() => !isDone && handleComplete(h)}
+                  disabled={isDone}
+                  className={`w-full py-4 rounded-2xl font-bold flex items-center justify-center gap-3 transition-all ${
+                    isDone 
+                    ? 'bg-emerald-500/10 text-emerald-500 ring-1 ring-emerald-500/20 cursor-default' 
+                    : 'bg-accent text-white shadow-xl shadow-accent/20 hover:scale-[1.02] active:scale-95'
+                  }`}
+                >
+                  {isDone ? <><Check size={20} className="stroke-[3]" /> {language === 'ar' ? 'تم لليوم' : 'Done for Today'}</> : <><Plus size={20} /> {language === 'ar' ? '+1 تسجيل' : '+1 Keep going'}</>}
+                </button>
+              </motion.div>
             );
           })}
         </div>
-      </div>
+      
+      <AnimatePresence>
+        {showModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/60 backdrop-blur-md" onClick={() => setShowModal(false)}>
+            <motion.form 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              onSubmit={handleSave} 
+              onClick={e => e.stopPropagation()}
+              className="relative w-full max-w-lg bg-bg-primary border border-border rounded-[2.5rem] shadow-2xl p-8 space-y-6 max-h-[90vh] overflow-y-auto no-scrollbar"
+            >
+              <div className="flex items-center justify-between">
+                <h2 className="text-3xl font-display font-bold">{form.id ? t('editHabit') : t('newHabit')}</h2>
+                <button type="button" onClick={() => setShowModal(false)} className="p-3 bg-bg-secondary rounded-2xl hover:scale-110 transition-transform"><X /></button>
+              </div>
 
-      {/* New Habit Modal */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setShowModal(false)}>
-          <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-5 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-display font-bold">New Habit</h2>
-              <button onClick={() => setShowModal(false)} className="text-muted-foreground hover:text-foreground transition-colors">
-                <X size={20} />
-              </button>
-            </div>
-
-            <form onSubmit={handleCreate} className="space-y-4">
-              <div>
-                <label className="text-sm font-bold text-muted-foreground uppercase tracking-wider block mb-1.5">Title *</label>
-                <input
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-text-secondary uppercase tracking-widest ml-1">What Routine?</label>
+                <input 
                   autoFocus
-                  value={form.title}
-                  onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
-                  placeholder="e.g. Morning Meditation"
-                  className="w-full bg-secondary border border-border rounded-xl px-4 py-3 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all"
                   required
+                  value={form.title}
+                  onChange={e => setForm({...form, title: e.target.value})}
+                  placeholder="e.g. Master the morning"
+                  className="w-full bg-bg-secondary/50 border border-border rounded-3xl px-6 py-5 outline-none focus:ring-4 focus:ring-accent/10 focus:border-accent transition-all text-xl font-bold"
                 />
               </div>
 
-              <div>
-                <label className="text-sm font-bold text-muted-foreground uppercase tracking-wider block mb-1.5">Emoji</label>
-                <div className="flex flex-wrap gap-2">
-                  {EMOJIS.map(emoji => (
-                    <button
-                      key={emoji}
+              <div className="space-y-3">
+                <label className="text-[10px] font-bold text-text-secondary uppercase tracking-widest ml-1">Pick a symbol</label>
+                <div className="grid grid-cols-6 gap-3">
+                  {ICONS.map(item => (
+                    <button 
+                      key={item.key}
                       type="button"
-                      onClick={() => setForm(f => ({ ...f, emoji }))}
-                      className={`text-2xl w-10 h-10 rounded-lg flex items-center justify-center transition-all ${form.emoji === emoji ? 'bg-primary/20 ring-2 ring-primary' : 'bg-secondary hover:bg-secondary/80'}`}
+                      onClick={() => setForm({...form, icon: item.key})}
+                      className={`aspect-square rounded-2xl flex items-center justify-center transition-all ${form.icon === item.key ? 'bg-accent text-white shadow-xl shadow-accent/20 scale-110' : 'bg-bg-secondary hover:bg-border/20 text-text-secondary'}`}
                     >
-                      {emoji}
+                      <item.Icon size={20} />
                     </button>
                   ))}
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-sm font-bold text-muted-foreground uppercase tracking-wider block mb-1.5">Category</label>
-                  <select
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-text-secondary uppercase tracking-widest ml-1">Category</label>
+                  <select 
                     value={form.category}
-                    onChange={e => setForm(f => ({ ...f, category: e.target.value as any }))}
-                    className="w-full bg-secondary border border-border rounded-xl px-4 py-3 outline-none focus:border-primary transition-all"
+                    onChange={e => setForm({...form, category: e.target.value as any})}
+                    className="w-full h-14 rounded-2xl bg-bg-secondary border border-border px-4 font-bold outline-none cursor-pointer"
                   >
-                    {CATEGORIES.map(c => <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>)}
+                    {CATEGORIES.map(c => <option key={c} value={c}>{c.toUpperCase()}</option>)}
                   </select>
                 </div>
-
-                <div>
-                  <label className="text-sm font-bold text-muted-foreground uppercase tracking-wider block mb-1.5">Frequency</label>
-                  <select
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-text-secondary uppercase tracking-widest ml-1">How often?</label>
+                  <select 
                     value={form.frequency}
-                    onChange={e => setForm(f => ({ ...f, frequency: e.target.value as any }))}
-                    className="w-full bg-secondary border border-border rounded-xl px-4 py-3 outline-none focus:border-primary transition-all"
+                    onChange={e => setForm({...form, frequency: e.target.value as any})}
+                    className="w-full h-14 rounded-2xl bg-bg-secondary border border-border px-4 font-bold outline-none cursor-pointer"
                   >
-                    <option value="daily">Daily</option>
-                    <option value="weekly">Weekly</option>
+                    {FREQUENCIES.map(f => <option key={f} value={f}>{f.toUpperCase()}</option>)}
                   </select>
                 </div>
               </div>
 
-              <div>
-                <label className="text-sm font-bold text-muted-foreground uppercase tracking-wider block mb-1.5">XP per completion: {form.xp_per_complete}</label>
-                <input
-                  type="range"
-                  min={5}
-                  max={100}
-                  step={5}
-                  value={form.xp_per_complete}
-                  onChange={e => setForm(f => ({ ...f, xp_per_complete: Number(e.target.value) }))}
-                  className="w-full accent-primary"
+              <div className="space-y-4 pt-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-text-secondary uppercase tracking-widest ml-1">Target times</label>
+                  <span className="text-xl font-display font-bold text-accent">{form.target_per_day}×</span>
+                </div>
+                <input 
+                  type="range" min={1} max={10} step={1}
+                  value={form.target_per_day}
+                  onChange={e => setForm({...form, target_per_day: Number(e.target.value)})}
+                  className="w-full accent-accent h-2 bg-bg-secondary rounded-full appearance-none cursor-pointer"
                 />
               </div>
 
-              <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setShowModal(false)} className="flex-1 py-3 rounded-xl font-bold bg-secondary text-foreground hover:bg-secondary/80 transition-colors">
+              <div className="bg-bg-secondary/50 rounded-3xl p-6 border border-border/50 space-y-4">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-text-secondary uppercase tracking-widest">Reminders</label>
+                  <input 
+                    type="time" 
+                    value={form.reminder_time}
+                    onChange={e => setForm({...form, reminder_time: e.target.value})}
+                    className="bg-bg-primary border border-border rounded-xl px-3 py-1 font-mono font-bold text-xs"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {REMINDER_OPTIONS.map(m => {
+                    const active = form.reminders.includes(m);
+                    return (
+                      <button 
+                        key={m}
+                        type="button"
+                        onClick={() => {
+                          const next = active ? form.reminders.filter(x => x !== m) : [...form.reminders, m].sort((a,b) => b-a);
+                          setForm({...form, reminders: next});
+                        }}
+                        className={`px-4 py-2 rounded-xl text-[10px] font-bold uppercase transition-all ${active ? 'bg-accent text-white shadow-lg shadow-accent/20' : 'bg-bg-primary border border-border text-text-secondary opacity-60'}`}
+                      >
+                        {m === 0 ? 'On time' : `${m}m before`}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex gap-4 pt-4">
+                <button 
+                  type="button" 
+                  onClick={() => setShowModal(false)} 
+                  className="flex-1 py-5 rounded-3xl font-bold text-text-secondary hover:bg-bg-secondary transition-colors"
+                >
                   Cancel
                 </button>
-                <button
-                  type="submit"
-                  disabled={isCreating || !form.title.trim()}
-                  className="flex-1 py-3 rounded-xl font-bold bg-primary text-primary-foreground hover:bg-primary/90 transition-all shadow-lg shadow-primary/25 disabled:opacity-50 flex items-center justify-center gap-2"
+                <button 
+                  type="submit" 
+                  disabled={isCreating}
+                  className="flex-[2] py-5 rounded-3xl font-bold bg-accent text-white shadow-2xl shadow-accent/30 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2"
                 >
-                  {isCreating ? <><Loader2 size={16} className="animate-spin" /> Creating...</> : 'Create Habit'}
+                  {isCreating ? <Loader2 className="animate-spin" /> : (form.id ? 'Save Habit' : 'Deploy Routine')}
                 </button>
               </div>
-            </form>
+            </motion.form>
           </div>
-        </div>
-      )}
-    </AppShell>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {confirmDel && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm" onClick={() => setConfirmDel(null)}>
+            <motion.div 
+               initial={{ opacity: 0, scale: 0.9 }}
+               animate={{ opacity: 1, scale: 1 }}
+               exit={{ opacity: 0, scale: 0.9 }}
+               className="bg-bg-primary border border-border rounded-[2rem] p-8 max-w-sm w-full space-y-6 text-center"
+               onClick={e => e.stopPropagation()}
+            >
+              <div className="w-20 h-20 rounded-full bg-red-500/10 flex items-center justify-center mx-auto text-red-500">
+                <Trash2 size={32} />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-xl font-bold">Delete this routine?</h3>
+                <p className="text-sm text-text-secondary">This action cannot be undone. All streak data will be archived.</p>
+              </div>
+              <div className="flex gap-3">
+                <button onClick={() => setConfirmDel(null)} className="flex-1 py-4 font-bold bg-bg-secondary rounded-2xl">Wait, no</button>
+                <button 
+                  onClick={() => {
+                    deleteHabit({ id: confirmDel.id }, { onSuccess: () => { setConfirmDel(null); refetch(); addNotification(t('note_deleted'), 'success'); } });
+                  }} 
+                  className="flex-1 py-4 font-bold bg-red-500 text-white rounded-2xl shadow-xl shadow-red-500/20"
+                >
+                  Yes, delete
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
   );
-}
+};

@@ -13,6 +13,7 @@ import { Plans } from './pages/Plans';
 import { Favorites } from './pages/Favorites';
 import AuthPage from './pages/AuthPage';
 import OnboardingPage from './pages/OnboardingPage';
+import LandingPage from './pages/LandingPage';
 import { AppShell } from './components/layout/AppShell';
 import './index.css';
 
@@ -43,14 +44,15 @@ const App = () => {
 
   const fetchProfile = async (userId: string) => {
     const { data, error } = await supabase
-      .from('user_profiles')
+      .from('users')
       .select('*')
       .eq('id', userId)
       .single();
 
     if (!error && data) {
       setProfile(data);
-      if (!data.is_onboarded && location !== '/onboarding' && location !== '/auth') {
+      const { data: lp } = await supabase.from('life_profiles').select('id').eq('user_id', userId).single();
+      if (!lp && location !== '/onboarding' && location !== '/auth') {
         setLocation('/onboarding');
       }
     }
@@ -105,7 +107,7 @@ const App = () => {
 
           <Route path="/chat">
             {!session ? <Redirect to="/auth" /> : (
-              <AppShell>
+              <AppShell hideTopbar>
                 <Chat />
               </AppShell>
             )}
@@ -114,7 +116,7 @@ const App = () => {
           <Route path="/plans">
             {!session ? <Redirect to="/auth" /> : (
               <AppShell>
-                <Plans plans={[]} onAskAI={() => {}} />
+                <Plans />
               </AppShell>
             )}
           </Route>
@@ -122,7 +124,7 @@ const App = () => {
           <Route path="/favorites">
             {!session ? <Redirect to="/auth" /> : (
               <AppShell>
-                <Favorites favorites={[]} onAskAI={() => {}} onRemove={() => {}} />
+                <Favorites />
               </AppShell>
             )}
           </Route>
@@ -132,7 +134,7 @@ const App = () => {
           </Route>
 
           <Route path="/">
-            <Redirect to={session ? "/dashboard" : "/auth"} />
+            {session ? <Redirect to="/dashboard" /> : <LandingPage />}
           </Route>
 
           <Route>

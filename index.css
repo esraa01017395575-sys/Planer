@@ -38,6 +38,34 @@
   --border: rgba(255, 255, 255, 0.1);
 }
 
+/* Theme variations */
+:root[data-theme="midnight"] {
+  --accent: #7C5CFC;
+  --accent-glow: rgba(124, 92, 252, 0.2);
+}
+.dark[data-theme="midnight"] {
+  --accent: #9d84fd;
+  --accent-glow: rgba(157, 132, 253, 0.15);
+}
+
+:root[data-theme="aurora"] {
+  --accent: #00C896;
+  --accent-glow: rgba(0, 200, 150, 0.2);
+}
+.dark[data-theme="aurora"] {
+  --accent: #20d8a8;
+  --accent-glow: rgba(32, 216, 168, 0.15);
+}
+
+:root[data-theme="solar"] {
+  --accent: #F5A623;
+  --accent-glow: rgba(245, 166, 35, 0.2);
+}
+.dark[data-theme="solar"] {
+  --accent: #f7b84f;
+  --accent-glow: rgba(247, 184, 79, 0.15);
+}
+
 body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
@@ -88,4 +116,12 @@ body {
 
 [data-theme='dark'] ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.1);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
