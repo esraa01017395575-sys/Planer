@@ -535,11 +535,11 @@ export const Tasks = ({ currentUser }: any) => {
                                           priority: 'medium'
                                         }
                                       }, {
-                                        onSuccess: (newTask: any) => {
-                                          setTasks([newTask, ...tasks]);
+                                        onSuccess: () => {
                                           setQuickAddColumn(null);
                                           setQuickAddTitle('');
                                           addNotification("Task added quick!", "success");
+                                          refetch();
                                         }
                                       });
                                     } else if (e.key === 'Escape') {

@@ -6,7 +6,7 @@ Your AI Coach is designed to be more than just a chatbot. It's an integrated par
 
 ### 1. Task Management & Subtask Generation
 The AI can help you break down complex tasks into manageable subtasks.
-- **How to use:** In the Tasks page, click the "AI Generate" button on any task.
+
 - **What happens:** The AI analyzes the task title and suggests a list of logical steps to complete it.
 
 ### 2. Long-Term Planning

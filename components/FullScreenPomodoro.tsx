@@ -1,14 +1,7 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  Timer, Calendar as CalendarIcon, Clock, ChevronLeft, 
-  ChevronRight, Play, Pause, RotateCcw, CheckCircle2,
-  Flag, ListTodo, Activity, X, Maximize2, Minimize2
-} from 'lucide-react';
-import { useAppContext } from '../context/AppContext';
-import { useGetTasks } from '../lib/hooks';
-import { format, addDays, startOfWeek, isSameDay, startOfMonth, eachDayOfInterval, isToday } from 'date-fns';
-import { PomodoroTimer, FloatingPomodoro } from './PomodoroTimer';
+import { X, Minimize2, Play, Pause, Square, Volume2, VolumeX } from 'lucide-react';
+import { useRecordPomodoroSession } from '../lib/hooks';
 
 type Props = {
   isOpen: boolean;
@@ -16,39 +9,94 @@ type Props = {
   initialTask?: any;
 };
 
+const fmtTime = (secs: number) => {
+  const m = Math.floor(secs / 60).toString().padStart(2, '0');
+  const s = (secs % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+};
+
 export const FullScreenPomodoro = ({ isOpen, onClose, initialTask }: Props) => {
-  const { language } = useAppContext();
-  const { data: tasksData } = useGetTasks();
-  const [selectedTask, setSelectedTask] = useState<any>(initialTask || null);
-  const [currentDate, setCurrentDate] = useState(new Date());
-  const [isMinimized, setIsMinimized] = useState(false);
+  const { mutate: recordPomodoro } = useRecordPomodoroSession();
+  const [task, setTask] = useState<any | null>(initialTask || null);
+  const [phase, setPhase] = useState<'work' | 'break'>('work');
+  const [secondsLeft, setSecondsLeft] = useState<number>((initialTask?.workMin || 25) * 60);
+  const [cycle, setCycle] = useState<number>(0);
+  const [running, setRunning] = useState<boolean>(false);
+  const [soundOn, setSoundOn] = useState<boolean>(true);
+  const [isMinimized, setIsMinimized] = useState<boolean>(false);
+  const [workMinInput, setWorkMinInput] = useState<number>(task?.workMin || 25);
+  const [breakMinInput, setBreakMinInput] = useState<number>(task?.breakMin || 5);
+  const [longBreakMinInput, setLongBreakMinInput] = useState<number>(task?.longBreakMin || 15);
+  const [stats, setStats] = useState<{ sessions: number; minutes: number }>({ sessions: 0, minutes: 0 });
 
   useEffect(() => {
-    if (initialTask) setSelectedTask(initialTask);
+    if (initialTask) {
+      setTask(initialTask);
+      setSecondsLeft((initialTask.workMin || 25) * 60);
+      setPhase('work');
+      setCycle(0);
+      setRunning(false);
+    }
+    // load persisted settings & stats
+    try {
+      const s = localStorage.getItem('pomodoroStats');
+      if (s) setStats(JSON.parse(s));
+      const cfg = localStorage.getItem('pomodoroSettings');
+      if (cfg) {
+        const parsed = JSON.parse(cfg);
+        setWorkMinInput(parsed.workMin || workMinInput);
+        setBreakMinInput(parsed.breakMin || breakMinInput);
+        setLongBreakMinInput(parsed.longBreakMin || longBreakMinInput);
+      }
+    } catch (e) { }
   }, [initialTask]);
 
-  // Filter out 'done' tasks and sort
-  const activeTasks = useMemo(() => {
-    if (!tasksData) return [];
-    return tasksData
-      .filter((t: any) => t.status !== 'done')
-      .sort((a: any, b: any) => {
-        const pValues: any = { high: 0, medium: 1, low: 2 };
-        if (pValues[a.priority] !== pValues[b.priority]) {
-          return pValues[a.priority] - pValues[b.priority];
+  useEffect(() => {
+    if (!running) return;
+    const iv = setInterval(() => {
+      setSecondsLeft(s => {
+        if (s <= 1) {
+          // phase end
+          if (phase === 'work') {
+            const newCount = cycle + 1;
+            setCycle(newCount);
+            const isDeepWork = (task?.workMin || 25) >= 50;
+            const breakTime = newCount % 4 === 0 ? (isDeepWork ? 20 : 15) : (isDeepWork ? 10 : 5);
+            recordPomodoro({ task_id: task?.id, duration_minutes: Math.round((task?.workMin || 25)) });
+            if ('Notification' in window && Notification.permission === 'granted') {
+              new Notification('Focus Complete', { body: 'Time for a break!' });
+            }
+            setPhase('break');
+            setSecondsLeft(breakTime * 60);
+            setRunning(false);
+            return 0;
+          } else {
+            if ('Notification' in window && Notification.permission === 'granted') {
+              new Notification('Break Complete', { body: 'Ready to focus again?' });
+            }
+            setPhase('work');
+            setSecondsLeft((task?.workMin || 25) * 60);
+            setRunning(false);
+            return 0;
+          }
         }
-        return (a.scheduled_time || '00:00').localeCompare(b.scheduled_time || '00:00');
+        return s - 1;
       });
-  }, [tasksData]);
-
-  // Calendar logic
-  const monthDays = useMemo(() => {
-    const start = startOfWeek(startOfMonth(currentDate));
-    const end = addDays(start, 41);
-    return eachDayOfInterval({ start, end });
-  }, [currentDate]);
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [running, phase, cycle, task, recordPomodoro]);
 
   if (!isOpen) return null;
+  if (!task) return null;
+  if (isMinimized) {
+    // minimize: set floating-like behavior then close
+    onClose();
+    return null;
+  }
+
+  const total = (phase === 'work' ? (task.workMin || 25) : (task.breakMin || 5)) * 60;
+  const pct = ((total - secondsLeft) / total) * 100;
+  const C = 2 * Math.PI * 100;
 
   return (
     <AnimatePresence>
@@ -56,211 +104,120 @@ export const FullScreenPomodoro = ({ isOpen, onClose, initialTask }: Props) => {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="fixed inset-0 z-[100] bg-bg-primary overflow-hidden flex flex-col"
+        className="fixed inset-0 z-[100] bg-app-card flex flex-col items-center justify-center p-6 animate-fade-in overflow-hidden"
       >
-        {/* Background Image Overlay */}
-        <div 
-          className="absolute inset-0 z-0 opacity-20 grayscale brightness-50"
-          style={{ 
-            backgroundImage: `url('/assets/images/focus_background.png')`,
-            backgroundSize: 'cover',
-            backgroundPosition: 'center'
-          }}
-        />
-        
-        {/* Animated Orbs for Depth */}
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-accent/10 blur-[120px] rounded-full animate-pulse" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-indigo-500/10 blur-[120px] rounded-full animate-pulse" style={{ animationDelay: '2s' }} />
-
-        <div className="relative z-10 flex flex-col h-full">
-          {/* Header */}
-          <header className="px-8 py-6 flex items-center justify-between border-b border-border/10 backdrop-blur-md">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-accent rounded-xl flex items-center justify-center shadow-lg shadow-accent/20">
-                <Timer className="text-white w-6 h-6" />
-              </div>
-              <div>
-                <h1 className="text-xl font-display font-bold text-text-primary tracking-tight">Focus Session</h1>
-                <p className="text-[10px] text-text-secondary uppercase tracking-widest font-bold opacity-60">Deep Work Mode</p>
-              </div>
-            </div>
-            
-            <button 
-              onClick={onClose}
-              className="p-3 hover:bg-bg-secondary rounded-full transition-all text-text-secondary hover:text-red-500 hover:rotate-90"
-            >
-              <X className="w-6 h-6" />
-            </button>
-          </header>
-
-          {/* Main Content Area */}
-          <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
-            <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-10">
-              
-              {/* Left Column: Pomodoro Hero */}
-              <div className="lg:col-span-7 space-y-8">
-                <div className="glass-card p-12 relative overflow-hidden bg-white/5 border-white/10 shadow-2xl backdrop-blur-3xl">
-                  <div className="relative z-10 flex flex-col items-center justify-center text-center min-h-[400px]">
-                    {selectedTask ? (
-                      <div className="w-full max-w-md mx-auto scale-125 my-12">
-                         {!isMinimized && (
-                           <PomodoroTimer 
-                             taskId={selectedTask.id} 
-                             taskTitle={selectedTask.title}
-                             onClose={() => setSelectedTask(null)}
-                             onMinimize={() => setIsMinimized(true)}
-                             autoStart={true}
-                           />
-                         )}
-                      </div>
-                    ) : (
-                      <div className="py-20 space-y-8">
-                        <div className="w-32 h-32 bg-accent/10 rounded-full flex items-center justify-center mx-auto ring-[12px] ring-accent/5 animate-pulse">
-                          <Timer className="w-14 h-14 text-accent" />
-                        </div>
-                        <div className="space-y-3">
-                          <h2 className="text-3xl font-display font-bold text-text-primary">Ready to Focus?</h2>
-                          <p className="text-text-secondary max-w-xs mx-auto text-lg">Select a task from the timeline to start your session</p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Timeline View */}
-                <div className="space-y-6">
-                  <div className="flex items-center gap-3 px-2">
-                    <ListTodo className="w-6 h-6 text-accent" />
-                    <h2 className="text-2xl font-display font-bold text-text-primary">Tasks Timeline</h2>
-                  </div>
-                  
-                  <div className="space-y-4 relative before:absolute before:inset-0 before:left-[19px] before:w-[2px] before:bg-gradient-to-b before:from-accent/50 before:via-border/20 before:to-transparent pl-2 pb-12">
-                    {activeTasks.length > 0 ? (
-                      activeTasks.map((task: any, index: number) => (
-                        <motion.div
-                          key={task.id}
-                          initial={{ opacity: 0, x: -20 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: index * 0.05 }}
-                          className={`relative flex items-start gap-8 group transition-all duration-300 ${selectedTask?.id === task.id ? 'scale-[1.02]' : ''}`}
-                        >
-                          <div className={`mt-3 w-10 h-10 rounded-full border-4 border-bg-primary z-10 flex items-center justify-center transition-all shadow-md font-bold ${selectedTask?.id === task.id ? 'bg-accent text-white border-accent/20 scale-110' : 'bg-bg-secondary text-text-secondary group-hover:bg-accent/10'}`}>
-                             {index + 1}
-                          </div>
-                          
-                          <div 
-                            onClick={() => { setSelectedTask(task); setIsMinimized(false); }}
-                            className={`flex-1 glass-card p-6 cursor-pointer transition-all border-l-[6px] ${
-                              selectedTask?.id === task.id 
-                                ? 'border-l-accent bg-accent/10 shadow-xl shadow-accent/5' 
-                                : 'border-l-border hover:border-l-accent/50 hover:bg-bg-secondary/40'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between mb-3">
-                              <div className="flex items-center gap-3">
-                                <Flag className={`w-4 h-4 ${task.priority === 'high' ? 'text-red-500 fill-red-500' : task.priority === 'medium' ? 'text-yellow-500 fill-yellow-500' : 'text-green-500 fill-green-500'}`} />
-                                <span className="text-xs font-bold text-text-secondary uppercase tracking-widest">{task.priority}</span>
-                              </div>
-                              <div className="flex items-center gap-2 text-text-secondary">
-                                <Clock className="w-4 h-4" />
-                                <span className="text-sm font-mono font-bold">{task.scheduled_time || '09:00'}</span>
-                              </div>
-                            </div>
-                            <h3 className="font-bold text-text-primary text-xl group-hover:text-accent transition-colors">{task.title}</h3>
-                            {task.description && (
-                              <p className="text-text-secondary text-base mt-2 line-clamp-2 opacity-80">{task.description}</p>
-                            )}
-                          </div>
-                        </motion.div>
-                      ))
-                    ) : (
-                      <div className="glass-card p-20 text-center text-text-secondary flex flex-col items-center gap-4 border-dashed border-2">
-                        <CheckCircle2 className="w-16 h-16 opacity-10" />
-                        <p className="text-xl font-display">All tasks completed. Great job!</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Right Column: Calendar & Stats */}
-              <div className="lg:col-span-5 space-y-8">
-                <div className="glass-card p-8 border-accent/10 shadow-2xl overflow-hidden bg-white/5 backdrop-blur-2xl">
-                  <div className="flex items-center justify-between mb-8">
-                    <h3 className="text-xl font-display font-bold text-text-primary flex items-center gap-3">
-                      <CalendarIcon className="w-5 h-5 text-accent" />
-                      Personal Calendar
-                    </h3>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => setCurrentDate(addDays(currentDate, -30))} className="p-2 hover:bg-bg-secondary rounded-xl transition-colors"><ChevronLeft className="w-5 h-5" /></button>
-                      <button onClick={() => setCurrentDate(addDays(currentDate, 30))} className="p-2 hover:bg-bg-secondary rounded-xl transition-colors"><ChevronRight className="w-5 h-5" /></button>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-7 gap-2 mb-4">
-                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-                      <div key={day} className="text-[10px] font-bold text-text-secondary text-center uppercase py-2 tracking-widest">
-                        {day}
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="grid grid-cols-7 gap-2">
-                    {monthDays.map((day, idx) => {
-                      const isCurrentMonth = day.getMonth() === currentDate.getMonth();
-                      const hasTask = tasksData?.some(t => isSameDay(new Date(t.due_date), day));
-                      const today = isToday(day);
-
-                      return (
-                        <div 
-                          key={idx}
-                          className={`
-                            aspect-square rounded-2xl flex flex-col items-center justify-center text-sm relative transition-all cursor-default border border-transparent
-                            ${isCurrentMonth ? 'text-text-primary font-bold' : 'text-text-secondary opacity-20'}
-                            ${today ? 'bg-accent text-white shadow-xl shadow-accent/40 scale-105 border-accent' : 'hover:bg-bg-secondary hover:border-border'}
-                          `}
-                        >
-                          <span>{day.getDate()}</span>
-                          {hasTask && !today && (
-                            <div className="absolute bottom-2 w-1.5 h-1.5 bg-accent rounded-full animate-bounce"></div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="glass-card p-8 bg-gradient-to-br from-accent to-accent-glow text-white border-white/20 shadow-2xl shadow-accent/20">
-                  <h3 className="text-xl font-display font-bold mb-6 flex items-center gap-3">
-                    <Activity className="w-6 h-6 border-2 border-white/30 rounded-full p-1" />
-                    Focus Analytics
-                  </h3>
-                  <div className="grid grid-cols-2 gap-6">
-                     <div className="bg-white/10 p-6 rounded-3xl backdrop-blur-md border border-white/5">
-                        <span className="block text-[10px] font-bold uppercase tracking-widest opacity-60 mb-2">Sessions</span>
-                        <span className="text-4xl font-display font-bold">4</span>
-                     </div>
-                     <div className="bg-white/10 p-6 rounded-3xl backdrop-blur-md border border-white/5">
-                        <span className="block text-[10px] font-bold uppercase tracking-widest opacity-60 mb-2">Minutes</span>
-                        <span className="text-4xl font-display font-bold">100</span>
-                     </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+        <div className="absolute inset-0 z-0 opacity-20 pointer-events-none">
+          <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full blur-[120px]" style={{ background: phase === 'work' ? 'var(--accent)' : 'var(--accent-2)' }} />
+          <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full blur-[120px]" style={{ background: phase === 'work' ? 'var(--accent)' : 'var(--accent-2)' }} />
         </div>
 
-        {/* Floating Timer when minimized */}
-        {selectedTask && isMinimized && (
-          <FloatingPomodoro 
-            taskId={selectedTask.id} 
-            taskTitle={selectedTask.title}
-            onClose={() => { setSelectedTask(null); setIsMinimized(false); }}
-            autoStart={true}
-          />
-        )}
+        <div className="relative z-10 w-full max-w-xl flex flex-col items-center">
+          <div className="flex items-center justify-between w-full mb-8">
+            <div>
+              <h1 className="text-3xl font-display font-bold text-app truncate max-w-[200px] md:max-w-md">{task.title}</h1>
+              <p className="text-app-muted uppercase tracking-[0.2em] text-[10px] mt-1">{phase} mode · cycle #{cycle + (phase === 'work' ? 1 : 0)}</p>
+            </div>
+            <div className="flex gap-2">
+               <button onClick={() => { setIsMinimized(true); }} className="h-10 w-10 rounded-xl bg-app-secondary text-app-muted hover:text-accent flex items-center justify-center transition-all">
+                 <Minimize2 className="h-5 w-5" />
+               </button>
+               <button onClick={onClose} className="h-10 w-10 rounded-xl bg-app-secondary text-app-muted hover:text-danger flex items-center justify-center transition-all">
+                 <X className="h-5 w-5" />
+               </button>
+            </div>
+          </div>
+
+          <div className="relative h-[220px] w-[220px] md:h-[280px] md:w-[280px] flex items-center justify-center">
+             <svg className="absolute inset-0 h-full w-full -rotate-90" viewBox="0 0 260 260">
+                <circle cx="130" cy="130" r="100" fill="none" stroke="var(--app-secondary)" strokeWidth="6" />
+                <circle 
+                  cx="130" cy="130" r="100" fill="none" 
+                  stroke={phase === 'work' ? 'var(--accent)' : 'var(--accent-2)'} 
+                  strokeWidth="8" strokeLinecap="round"
+                  strokeDasharray={`${(pct/100) * C} ${C}`}
+                  style={{ transition: 'stroke-dasharray 0.5s linear' }}
+                />
+             </svg>
+             <div className="flex flex-col items-center">
+               <span className="text-6xl md:text-8xl font-mono font-bold text-app tracking-tighter">{fmtTime(secondsLeft)}</span>
+               <div className="mt-3 flex items-center gap-1.5">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className={`h-2 w-2 rounded-full ${i < cycle % 4 ? 'bg-accent' : 'bg-app-secondary'}`} />
+                  ))}
+               </div>
+             </div>
+          </div>
+
+          <div className="mt-12 flex items-center gap-6">
+             <button onClick={() => setSoundOn(s => !s)} className={`h-14 w-14 rounded-2xl flex items-center justify-center transition-all ${soundOn ? 'bg-accent/10 text-accent border border-accent/20' : 'bg-app-secondary text-app-muted'}`}>
+                {soundOn ? <Volume2 className="h-6 w-6" /> : <VolumeX className="h-6 w-6" />}
+             </button>
+
+             <button 
+               onClick={() => setRunning(r => !r)}
+               className="h-20 w-20 rounded-[30px] bg-accent text-white flex items-center justify-center hover:scale-105 shadow-elevated accent-glow transition-all"
+             >
+                {running ? <Pause className="h-8 w-8" /> : <Play className="h-8 w-8 ml-1" />}
+             </button>
+
+             <button onClick={() => { setRunning(false); setSecondsLeft((task.workMin || 25) * 60); setPhase('work'); }} className="h-14 w-14 rounded-2xl bg-danger/10 text-danger border border-danger/20 flex items-center justify-center hover:bg-danger/20 transition-all">
+                <Square className="h-6 w-6 fill-current" />
+             </button>
+          </div>
+
+          <div className="mt-8 flex flex-col items-center gap-4">
+            <div className="flex items-center gap-3">
+              <div className="text-[11px] text-app-faint">Sessions: <strong className="ml-1">{stats.sessions}</strong></div>
+              <div className="text-[11px] text-app-faint">Minutes: <strong className="ml-1">{stats.minutes}</strong></div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button onClick={() => playTestSound()} className="px-3 py-2 rounded-xl bg-bg-secondary text-text-secondary hover:bg-bg-secondary/80">Test Sound</button>
+              <button onClick={() => saveSettings()} className="px-3 py-2 rounded-xl bg-accent text-white">Save Settings</button>
+              <button onClick={() => manualRecord()} className="px-3 py-2 rounded-xl bg-emerald-500 text-white">Record Session</button>
+            </div>
+
+            <div className="mt-2 flex items-center gap-2">
+              <label className="text-xs">Work</label>
+              <input type="number" min={1} value={workMinInput} onChange={e => setWorkMinInput(Number(e.target.value))} className="w-20 p-2 rounded-xl bg-bg-secondary text-text-primary" />
+              <label className="text-xs">Break</label>
+              <input type="number" min={1} value={breakMinInput} onChange={e => setBreakMinInput(Number(e.target.value))} className="w-20 p-2 rounded-xl bg-bg-secondary text-text-primary" />
+              <label className="text-xs">Long</label>
+              <input type="number" min={1} value={longBreakMinInput} onChange={e => setLongBreakMinInput(Number(e.target.value))} className="w-20 p-2 rounded-xl bg-bg-secondary text-text-primary" />
+            </div>
+
+            <div className="mt-2 text-app-faint text-[11px]">Press <span className="px-1.5 py-0.5 bg-app-secondary rounded border border-app font-mono">Esc</span> to exit</div>
+          </div>
+        </div>
       </motion.div>
     </AnimatePresence>
   );
 };
+
+// Helpers: simple sound test and save/manual-record functions
+const playTestSound = () => {
+  try {
+    const a = new Audio('/sounds/click.mp3');
+    a.volume = 0.4;
+    a.play().catch(() => { a.src = 'https://assets.mixkit.co/active_storage/sfx/2571/2571-preview.mp3'; a.play().catch(() => {}); });
+  } catch (e) { }
+};
+
+function saveSettings() {
+  try {
+    const cfg = {
+      workMin: Number((document.querySelector('input[type=number]') as HTMLInputElement)?.value || 25)
+    };
+    localStorage.setItem('pomodoroSettings', JSON.stringify(cfg));
+  } catch (e) { }
+}
+
+function manualRecord() {
+  try {
+    const sRaw = localStorage.getItem('pomodoroStats');
+    let s = sRaw ? JSON.parse(sRaw) : { sessions: 0, minutes: 0 };
+    s.sessions = (s.sessions || 0) + 1;
+    s.minutes = (s.minutes || 0) + 25;
+    localStorage.setItem('pomodoroStats', JSON.stringify(s));
+  } catch (e) { }
+}

@@ -13,6 +13,7 @@ import { Plans } from './pages/Plans';
 import { Favorites } from './pages/Favorites';
 import AuthPage from './pages/AuthPage';
 import OnboardingPage from './pages/OnboardingPage';
+import LandingPage from './pages/LandingPage';
 import { AppShell } from './components/layout/AppShell';
 import './index.css';
 
@@ -135,7 +136,7 @@ const App = () => {
           </Route>
 
           <Route path="/">
-            <Redirect to={session ? "/dashboard" : "/auth"} />
+            {session ? <Redirect to="/dashboard" /> : <LandingPage />}
           </Route>
 
           <Route>

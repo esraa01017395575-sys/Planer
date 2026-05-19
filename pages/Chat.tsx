@@ -278,7 +278,7 @@ const ChatView = memo(({
 });
 
 export const Chat = () => {
-  const { addNotification, t } = useAppContext();
+  const { addNotification, t, language } = useAppContext();
   const { data: tasks } = useGetTasks();
   const { data: habits } = useGetHabits();
   const { data: schedule } = useGetDailySchedule();

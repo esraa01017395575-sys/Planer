@@ -179,8 +179,8 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   useEffect(() => {
     localStorage.setItem('theme', theme);
-    document.documentElement.setAttribute('data-theme', mode === 'dark' ? 'dark' : theme);
-  }, [theme, mode]);
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
 
   useEffect(() => {
     localStorage.setItem('mode', mode);
