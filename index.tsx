@@ -11,6 +11,7 @@ import { Chat } from './pages/Chat';
 import { Settings } from './pages/Settings';
 import { Plans } from './pages/Plans';
 import { Favorites } from './pages/Favorites';
+import { ProjectsPage } from './pages/ProjectsPage';
 import AuthPage from './pages/AuthPage';
 import OnboardingPage from './pages/OnboardingPage';
 import LandingPage from './pages/LandingPage';
@@ -117,6 +118,30 @@ const App = () => {
             {!session ? <Redirect to="/auth" /> : (
               <AppShell>
                 <Plans />
+              </AppShell>
+            )}
+          </Route>
+
+          <Route path="/projects">
+            {!session ? <Redirect to="/auth" /> : (
+              <AppShell>
+                <ProjectsPage />
+              </AppShell>
+            )}
+          </Route>
+
+          <Route path="/projects/:id">
+            {!session ? <Redirect to="/auth" /> : (
+              <AppShell>
+                <ProjectsPage />
+              </AppShell>
+            )}
+          </Route>
+
+          <Route path="/projects/:id/:tab">
+            {!session ? <Redirect to="/auth" /> : (
+              <AppShell>
+                <ProjectsPage />
               </AppShell>
             )}
           </Route>

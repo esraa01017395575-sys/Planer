@@ -237,7 +237,7 @@ export const Plans = ({ onAskAI: propsOnAskAI }: { onAskAI?: (content: string) =
                 initial={{ opacity: 0, scale: 0.9, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="bg-bg-primary border border-border rounded-[2.5rem] w-full max-w-2xl my-8 relative shadow-2xl overflow-hidden"
+                className="bg-bg-primary border border-border rounded-[2.5rem] w-full max-w-2xl relative shadow-2xl overflow-y-auto max-h-[90vh] no-scrollbar"
                 onClick={e => e.stopPropagation()}
               >
                 <div className="p-8">

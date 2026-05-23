@@ -6,8 +6,8 @@ export const useGetDailySchedule = (options?: { date?: string }) => {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchSchedule = async () => {
-    setLoading(true);
+  const fetchSchedule = async (silent = false) => {
+    if (!silent && data.length === 0) setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       setLoading(false);
@@ -44,9 +44,9 @@ export const useGetHabits = () => {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchHabits = async () => {
+  const fetchHabits = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent && data.length === 0) setLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         setLoading(false);
@@ -113,9 +113,9 @@ export const useGetTasks = () => {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchTasks = async () => {
+  const fetchTasks = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent && data.length === 0) setLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         setLoading(false);
@@ -658,9 +658,9 @@ export const useGetGoals = () => {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchGoals = async () => {
+  const fetchGoals = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent && data.length === 0) setLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         setLoading(false);
@@ -726,9 +726,9 @@ export const useGetPlanMilestones = (planId: string) => {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchMilestones = async () => {
+  const fetchMilestones = async (silent = false) => {
     if (!planId) return;
-    setLoading(true);
+    if (!silent && data.length === 0) setLoading(true);
     const { data: milestones, error } = await supabase
       .from('plan_milestones')
       .select('*')
@@ -1000,17 +1000,45 @@ export const useGetChatSessions = () => {
 
   const fetchSessions = async () => {
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
-    const { data: sessions, error } = await supabase
-      .from('chat_sessions')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('updated_at', { ascending: false });
+      const { data: rows, error } = await supabase
+        .from('chat_messages')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('role', 'assistant')
+        .eq('provider', 'ai_coach');
 
-    if (!error) setData(sessions || []);
-    setLoading(false);
+      if (!error && rows) {
+        const sessions = rows.map((row) => {
+          let parsedContent = { title: 'New Chat', messages: [] };
+          try {
+            parsedContent = JSON.parse(row.content);
+          } catch (e) {
+            parsedContent = { title: row.provider || 'Chat', messages: [] };
+          }
+          return {
+            id: row.id,
+            title: parsedContent.title || 'Chat',
+            updated_at: row.created_at,
+            created_at: row.created_at,
+            messages: parsedContent.messages || []
+          };
+        });
+        
+        sessions.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        setData(sessions);
+      } else {
+        const local = localStorage.getItem('ai_chat_sessions');
+        if (local) setData(JSON.parse(local));
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -1024,32 +1052,125 @@ export const useCreateChatSession = () => {
   const [isPending, setIsPending] = useState(false);
   const createSession = async ({ title }: { title: string }, options?: { onSuccess?: (data: any) => void }) => {
     setIsPending(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setIsPending(false);
+        return;
+      }
 
-    const { data, error } = await supabase.from('chat_sessions').insert({
-      user_id: user.id,
-      title,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    }).select().single();
+      const initialPayload = {
+        title: title,
+        messages: []
+      };
 
-    if (!error && options?.onSuccess) options.onSuccess(data);
-    setIsPending(false);
+      const { data, error } = await supabase
+        .from('chat_messages')
+        .insert({
+          user_id: user.id,
+          role: 'assistant',
+          content: JSON.stringify(initialPayload),
+          provider: 'ai_coach',
+          created_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+
+      if (!error && data) {
+        const newSession = {
+          id: data.id,
+          title: title,
+          created_at: data.created_at,
+          updated_at: data.created_at,
+          messages: []
+        };
+        if (options?.onSuccess) options.onSuccess(newSession);
+      } else {
+        console.error("Error inserting chat session into Supabase:", error);
+        const tempId = 'temp_' + Date.now();
+        const fallbackSession = { id: tempId, title, created_at: new Date().toISOString(), messages: [] };
+        
+        const local = localStorage.getItem('ai_chat_sessions');
+        const list = local ? JSON.parse(local) : [];
+        list.push(fallbackSession);
+        localStorage.setItem('ai_chat_sessions', JSON.stringify(list));
+
+        if (options?.onSuccess) options.onSuccess(fallbackSession);
+      }
+    } catch (e) {
+      console.error("Exception in createSession:", e);
+      const tempId = 'temp_' + Date.now();
+      const fallbackSession = { id: tempId, title, created_at: new Date().toISOString(), messages: [] };
+      if (options?.onSuccess) options.onSuccess(fallbackSession);
+    } finally {
+      setIsPending(false);
+    }
   };
   return { mutate: createSession, isPending };
 };
 
 export const useUpdateChatSession = () => {
   const updateSession = async (id: string, title: string) => {
-    await supabase.from('chat_sessions').update({ title, updated_at: new Date().toISOString() }).eq('id', id);
+    try {
+      if (id.startsWith('temp_')) {
+        const local = localStorage.getItem('ai_chat_sessions');
+        if (local) {
+          const list = JSON.parse(local);
+          const item = list.find((x: any) => x.id === id);
+          if (item) {
+            item.title = title;
+            localStorage.setItem('ai_chat_sessions', JSON.stringify(list));
+          }
+        }
+        return;
+      }
+
+      const { data: row, error } = await supabase
+        .from('chat_messages')
+        .select('content')
+        .eq('id', id)
+        .single();
+
+      if (!error && row) {
+        let parsed = { title, messages: [] };
+        try {
+          parsed = JSON.parse(row.content);
+          parsed.title = title;
+        } catch (e) {
+          parsed = { title, messages: [] };
+        }
+
+        await supabase
+          .from('chat_messages')
+          .update({
+            content: JSON.stringify(parsed)
+          })
+          .eq('id', id);
+      }
+    } catch (e) {
+      console.error(e);
+    }
   };
   return { mutate: updateSession };
 };
 
 export const useDeleteChatSession = () => {
   const deleteSession = async (id: string) => {
-    await supabase.from('chat_sessions').delete().eq('id', id);
+    try {
+      if (id.startsWith('temp_')) {
+        const local = localStorage.getItem('ai_chat_sessions');
+        if (local) {
+          const list = JSON.parse(local);
+          const filtered = list.filter((x: any) => x.id !== id);
+          localStorage.setItem('ai_chat_sessions', JSON.stringify(filtered));
+        }
+        return;
+      }
+
+      await supabase.from('chat_messages').delete().eq('id', id);
+    } catch (e) {
+      console.error(e);
+    }
   };
   return { mutate: deleteSession };
 };
@@ -1064,14 +1185,45 @@ export const useGetChatMessages = (sessionId: string | null) => {
       return;
     }
     setLoading(true);
-    const { data: messages, error } = await supabase
-      .from('chat_messages')
-      .select('*')
-      .eq('session_id', sessionId)
-      .order('created_at', { ascending: true });
+    try {
+      if (sessionId.startsWith('temp_')) {
+        const local = localStorage.getItem('ai_chat_sessions');
+        if (local) {
+          const list = JSON.parse(local);
+          const s = list.find((item: any) => item.id === sessionId);
+          if (s) {
+            setData(s.messages || []);
+            setLoading(false);
+            return;
+          }
+        }
+        setData([]);
+        setLoading(false);
+        return;
+      }
 
-    if (!error) setData(messages || []);
-    setLoading(false);
+      const { data: row, error } = await supabase
+        .from('chat_messages')
+        .select('content')
+        .eq('id', sessionId)
+        .single();
+
+      if (!error && row) {
+        try {
+          const parsed = JSON.parse(row.content);
+          setData(parsed.messages || []);
+        } catch (e) {
+          setData([]);
+        }
+      } else {
+        setData([]);
+      }
+    } catch (err) {
+      console.error(err);
+      setData([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -1083,14 +1235,56 @@ export const useGetChatMessages = (sessionId: string | null) => {
 
 export const useSaveChatMessage = () => {
   const saveMessage = async (sessionId: string, role: 'user' | 'model', content: string) => {
-    await supabase.from('chat_messages').insert({
-      session_id: sessionId,
-      role,
-      content,
-      created_at: new Date().toISOString()
-    });
-    // Update session timestamp
-    await supabase.from('chat_sessions').update({ updated_at: new Date().toISOString() }).eq('id', sessionId);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      if (sessionId.startsWith('temp_')) {
+        const local = localStorage.getItem('ai_chat_sessions');
+        if (local) {
+          const list = JSON.parse(local);
+          const sIdx = list.findIndex((item: any) => item.id === sessionId);
+          if (sIdx !== -1) {
+            if (!list[sIdx].messages) list[sIdx].messages = [];
+            list[sIdx].messages.push({ role, content, created_at: new Date().toISOString() });
+            localStorage.setItem('ai_chat_sessions', JSON.stringify(list));
+          }
+        }
+        return;
+      }
+
+      const { data: row, error: fetchErr } = await supabase
+        .from('chat_messages')
+        .select('content, provider')
+        .eq('id', sessionId)
+        .single();
+
+      if (!fetchErr && row) {
+        let parsed = { title: 'Chat', messages: [] as any[] };
+        try {
+          parsed = JSON.parse(row.content);
+        } catch (e) {
+          parsed = { title: row.provider || 'Chat', messages: [] };
+        }
+
+        if (!parsed.messages) parsed.messages = [];
+        
+        parsed.messages.push({
+          role,
+          content,
+          created_at: new Date().toISOString()
+        });
+
+        await supabase
+          .from('chat_messages')
+          .update({
+            content: JSON.stringify(parsed)
+          })
+          .eq('id', sessionId);
+      }
+    } catch (e) {
+      console.error("Exception in useSaveChatMessage:", e);
+    }
   };
   return { mutate: saveMessage };
 };

@@ -50,13 +50,15 @@ const EMPTY_FORM: HabitForm = {
 
 const Heatmap = ({ logs }: { logs: Set<string> }) => {
   const days = Array.from({ length: 30 }, (_, i) => {
-    const d = new Date(); d.setDate(d.getDate() - (29 - i));
+    const d = new Date();
+    d.setHours(12, 0, 0, 0); // avoid daylight saving and timezone anomalies
+    d.setDate(d.getDate() - (29 - i));
     return d.toISOString().slice(0, 10);
   });
   return (
     <div className="grid gap-1 mt-4" style={{ gridTemplateColumns: "repeat(30, 1fr)" }}>
-      {days.map((d) => (
-        <div key={d} title={d}
+      {days.map((d, idx) => (
+        <div key={`${d}-${idx}`} title={d}
           className={`aspect-square rounded-sm transition-colors ${logs.has(d) ? "bg-accent" : "bg-bg-secondary"}`} />
       ))}
     </div>
@@ -198,6 +200,7 @@ export const Habits = () => {
             <p className="text-sm text-text-secondary mt-1 font-medium italic opacity-70">"Consistency is the bridge between goals and accomplishment."</p>
           </div>
           <button 
+            type="button"
             onClick={() => { setForm(EMPTY_FORM); setShowModal(true); }}
             className="flex items-center gap-2 bg-accent text-white px-6 py-3 rounded-2xl font-bold shadow-xl shadow-accent/20 hover:scale-[1.02] active:scale-95 transition-all"
           >
@@ -475,8 +478,9 @@ export const Habits = () => {
                 <p className="text-sm text-text-secondary">This action cannot be undone. All streak data will be archived.</p>
               </div>
               <div className="flex gap-3">
-                <button onClick={() => setConfirmDel(null)} className="flex-1 py-4 font-bold bg-bg-secondary rounded-2xl">Wait, no</button>
+                <button type="button" onClick={() => setConfirmDel(null)} className="flex-1 py-4 font-bold bg-bg-secondary rounded-2xl">Wait, no</button>
                 <button 
+                  type="button"
                   onClick={() => {
                     deleteHabit({ id: confirmDel.id }, { onSuccess: () => { setConfirmDel(null); refetch(); addNotification(t('note_deleted'), 'success'); } });
                   }} 

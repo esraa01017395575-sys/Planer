@@ -129,3 +129,5 @@ export interface Favorite {
   content: string;
   created_at: string;
 }
+
+export * from './projects';

@@ -102,7 +102,7 @@ Functionality:
   const { mutate: saveMessage } = useSaveChatMessage();
 
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const { data: sessionMessages, loading: loadingMessages } = useGetChatMessages(currentSessionId);
+  const { data: sessionMessages, loading: loadingMessages, refetch: refetchMessages } = useGetChatMessages(currentSessionId);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState('');
@@ -166,15 +166,21 @@ Functionality:
   const sendActualMessage = async (sessionId: string, textOverride?: string) => {
     const userMessage = textOverride || inputMessage.trim();
     const currentFile = attachedFile;
-    if (!textOverride) setInputMessage('');
+    setInputMessage('');
     setAttachedFile(null);
     
-    // Save to DB
-    await saveMessage(sessionId, 'user', userMessage);
+    // 1. Optimistic Update: Add message to local UI state and start loading IMMEDIATELY
     setMessages(prev => [...prev, { role: 'user', content: userMessage, timestamp: new Date(), file: currentFile }]);
     setIsLoading(true);
 
     try {
+      // 2. Save User Message to DB in background - DO NOT let it block the Gemini call
+      saveMessage(sessionId, 'user', userMessage).then(() => {
+        refetchMessages();
+      }).catch(err => {
+        console.error("Failed to save user message to database background:", err);
+      });
+
       const context = `
         Current Tasks: ${JSON.stringify(tasks?.map(t => ({ title: t.title, status: t.status })))}
         Current Habits: ${JSON.stringify(habits?.map(h => ({ name: h.name, streak: h.current_streak })))}
@@ -194,6 +200,7 @@ Functionality:
         };
       }
 
+      // 3. Request Gemini API through backend proxy
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -209,9 +216,18 @@ Functionality:
       const data = await response.json();
       const aiResponse = data.text || (language === 'ar' ? 'عذراً، لم أستطع معالجة طلبك.' : 'Sorry, I could not process your request.');
       
-      await saveMessage(sessionId, 'model', aiResponse);
+      // 4. Update local state with Gemini's response immediately
       setMessages(prev => [...prev, { role: 'model', content: aiResponse, timestamp: new Date() }]);
-      refetchSessions();
+      
+      // 5. Save Gemini Response to DB in background - DO NOT let it block the user flow
+      saveMessage(sessionId, 'model', aiResponse).then(() => {
+        refetchMessages();
+        refetchSessions();
+      }).catch(err => {
+        console.error("Failed to save AI model response to database background:", err);
+        refetchSessions();
+      });
+
     } catch (error) {
       console.error('Chat Error:', error);
       addNotification('فشل الاتصال بالمدرب الذكي', 'error');

@@ -28,6 +28,7 @@ const translations: Record<Language, Record<string, string>> = {
   en: {
     dashboard: 'Dashboard',
     chat: 'AI Chat',
+    projects: 'Projects',
     plans: 'Plans',
     tasks: 'Tasks',
     habits: 'Habits',
@@ -146,6 +147,7 @@ const translations: Record<Language, Record<string, string>> = {
   ar: {
     dashboard: 'لوحة التحكم',
     chat: 'المحادثة الذكية',
+    projects: 'المشاريع',
     plans: 'الخطط',
     tasks: 'المهام',
     habits: 'العادات',
@@ -313,7 +315,7 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         {notifications.map(n => (
           <div 
             key={n.id}
-            className={`pointer-events-auto px-6 py-4 rounded-2xl shadow-2xl border flex items-center gap-3 animate-in slide-in-from-right-4 fade-in duration-300 ${
+            className={`pointer-events-auto px-6 py-4 rounded-2xl shadow-2xl border flex items-center gap-3 animate-in slide-in-from-right-4 fade-in duration-300 opacity-80 ${
               n.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' :
               n.type === 'error' ? 'bg-red-500/10 border-red-500/20 text-red-500' :
               'bg-accent/10 border-accent/20 text-accent'

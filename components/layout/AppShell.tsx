@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  LayoutDashboard, MessageSquare, Target, CheckSquare, 
+  LayoutDashboard, MessageSquare, FolderGit2, Target, CheckSquare, 
   Activity, StickyNote, Settings, Heart, Calendar, 
   Bell, Sun, Moon, Search, Plus, User, LogOut, Check, Trash2, Clock
 } from 'lucide-react';
@@ -19,6 +19,7 @@ const Sidebar = () => {
     { id: 'chat', icon: MessageSquare, label: t('chat'), path: '/chat' },
     { id: 'plans', icon: Target, label: t('plans'), path: '/plans' },
     { id: 'tasks', icon: CheckSquare, label: t('tasks'), path: '/tasks' },
+    { id: 'projects', icon: FolderGit2, label: t('projects'), path: '/projects' },
     { id: 'habits', icon: Activity, label: t('habits'), path: '/habits' },
     { id: 'notes', icon: StickyNote, label: t('notes'), path: '/notes' },
   ];
@@ -157,14 +158,7 @@ const Topbar = () => {
   return (
     <div className={`fixed top-4 ${language === 'ar' ? 'right-24 left-4' : 'left-24 right-4'} h-16 glass-card z-40 flex items-center justify-between px-6 border-none shadow-lg`}>
       <div className="flex items-center gap-4 flex-1">
-        <div className="relative w-full max-w-md hidden md:block">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary w-4 h-4" />
-          <input 
-            type="text" 
-            placeholder="Search your OS..." 
-            className="w-full bg-bg-secondary/50 border-none rounded-xl py-2 pl-10 pr-4 outline-none focus:ring-2 focus:ring-accent/20 transition-all text-sm"
-          />
-        </div>
+        {/* Search removed */}
       </div>
 
       <div className="flex items-center gap-2">
