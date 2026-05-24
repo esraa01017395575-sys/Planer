@@ -21,17 +21,27 @@ export default function OnboardingPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('No user found');
 
+      // Update name in users table if needed
+      await supabase
+        .from('users')
+        .update({ name: formData.name })
+        .eq('id', user.id);
+
+      // Upsert into life_profiles table
+      const formattedWake = formData.wakeTime ? (formData.wakeTime.length === 5 ? `${formData.wakeTime}:00` : formData.wakeTime) : '07:00:00';
+      const formattedSleep = formData.sleepTime ? (formData.sleepTime.length === 5 ? `${formData.sleepTime}:00` : formData.sleepTime) : '23:00:00';
+
       const { error } = await supabase
-        .from('user_profiles')
+        .from('life_profiles')
         .upsert({
-          id: user.id,
-          email: user.email,
+          user_id: user.id,
+          email: user.email || '',
           name: formData.name,
-          wake_time: formData.wakeTime,
-          sleep_time: formData.sleepTime,
+          wake_time: formattedWake,
+          sleep_time: formattedSleep,
           energy_peak: formData.energyPeak,
           is_onboarded: true
-        });
+        }, { onConflict: 'user_id' });
 
       if (error) throw error;
       setLocation('/dashboard');

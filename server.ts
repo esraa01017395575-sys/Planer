@@ -14,7 +14,14 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 // On the server side, we prioritize using the Service Role Key if available.
 // This allows the backend to perform database operations securely across RLS boundaries.
 const supabaseKey = supabaseServiceKey || supabaseAnonKey;
-const supabase = createClient(supabaseUrl, supabaseKey);
+let supabase: any = null;
+if (supabaseUrl && supabaseKey) {
+  try {
+    supabase = createClient(supabaseUrl, supabaseKey);
+  } catch (err) {
+    console.error("Failed to initialize Supabase client on backend:", err);
+  }
+}
 
 if (!supabaseUrl || !supabaseKey) {
   console.warn("WARNING: Supabase credentials are not configured in environment. File fallback active.");
@@ -261,112 +268,365 @@ async function startServer() {
     return text;
   };
 
+  const getDBContextForUser = async (userId: string): Promise<string> => {
+    if (!supabase || !userId) return "";
+    
+    try {
+      let userName = "البطل";
+      let wakeTime = "07:00";
+      let sleepTime = "23:00";
+      let energyPeak = "صباحي";
+      let defaultLang = "ar";
+
+      // 1. Fetch User profile
+      const { data: userRow } = await supabase.from('users').select('name').eq('id', userId).maybeSingle();
+      if (userRow?.name) {
+        userName = userRow.name;
+      }
+
+      // 2. Fetch Life profiles
+      const { data: lifeRow } = await supabase.from('life_profiles').select('wake_time, sleep_time, energy_peak').eq('user_id', userId).maybeSingle();
+      if (lifeRow) {
+        wakeTime = lifeRow.wake_time ? String(lifeRow.wake_time).slice(0, 5) : "07:00";
+        sleepTime = lifeRow.sleep_time ? String(lifeRow.sleep_time).slice(0, 5) : "23:00";
+        energyPeak = lifeRow.energy_peak || "صباحي";
+      }
+
+      // 3. Database aggregation
+      let activeLongTermPlans = "";
+      let todayPendingTasks = "";
+      let yesterdayTasksResults = "";
+      let todayHabitStreaks = "";
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+      // Today Tasks
+      const { data: tTasks } = await supabase.from('tasks').select('title, status, priority').eq('user_id', userId).eq('due_date', todayStr);
+      if (tTasks && tTasks.length > 0) {
+        todayPendingTasks = tTasks.filter((t: any) => t.status !== 'done').map((t: any) => `- ${t.title} [الأهمية: ${t.priority}]`).join('\n');
+      }
+
+      // Yesterday Tasks
+      const { data: yTasks } = await supabase.from('tasks').select('title, status').eq('user_id', userId).eq('due_date', yesterdayStr);
+      if (yTasks && yTasks.length > 0) {
+        const completed = yTasks.filter((t: any) => t.status === 'done').map((t: any) => `- ${t.title}`);
+        const skipped = yTasks.filter((t: any) => t.status !== 'done').map((t: any) => `- ${t.title}`);
+        yesterdayTasksResults = `\nمنجز أمس:\n${completed.join('\n') || "لاشيء"}\nالمؤجل/المتخطي أمس:\n${skipped.join('\n') || "لاشيء"}`;
+      }
+
+      // Habits
+      const { data: dbHabits } = await supabase.from('habits').select('title, current_streak').eq('user_id', userId);
+      if (dbHabits && dbHabits.length > 0) {
+        todayHabitStreaks = dbHabits.map((h: any) => `- ${h.title}: (سلسلة أيام: ${h.current_streak || 0})`).join('\n');
+      }
+
+      // Active plans
+      let dbProjRes = await supabase.from('long_term_plans').select('title, status, current_phase').eq('user_id', userId);
+      if (dbProjRes.error) {
+        dbProjRes = await supabase.from('goals').select('title, status').eq('user_id', userId);
+      }
+      const dbProj = dbProjRes.data;
+      if (dbProj && dbProj.length > 0) {
+        activeLongTermPlans = dbProj.map((p: any) => `- ${p.title} (${p.status || 'نشط'}) ${p.current_phase ? `- المرحلة الحالية: ${p.current_phase}` : ''}`).join('\n');
+      }
+
+      const profileDetails = `
+- اسم المستخدم: ${userName}
+- وقت الاستيقاظ: ${wakeTime}
+- وقت النوم: ${sleepTime}
+- أوقات الانتاجية العالية (Peak Energy): ${energyPeak}
+- اللغة المختارة: ${defaultLang}
+      `;
+
+      return `
+[معلومات المستخدم]
+${profileDetails}
+
+[خطط ومشاريع بعيدة المدى ومراحل متبقية]
+${activeLongTermPlans || "لا يوجد مشاريع مسجلة حالياً."}
+
+[مهام اليوم المعلقة]
+${todayPendingTasks || "لا يوجد مهام معلقة مسجلة لليوم."}
+
+[مهام أمس]
+${yesterdayTasksResults || "لا يوجد سجل مهام مسجل لأمس."}
+
+[سلاسل العادات ومستوى الانجاز اليومي]
+${todayHabitStreaks || "لا يوجد عادات مسجلة حالياً."}
+      `;
+    } catch (err) {
+      console.error("Failed to fetch user DB context in local backup flow:", err);
+      return "";
+    }
+  };
+
+  const getChatSystemInstruction = async (userId: string): Promise<string> => {
+    let userName = "البطل";
+    if (supabase && userId) {
+      try {
+        const { data: userRow } = await supabase.from('users').select('name').eq('id', userId).maybeSingle();
+        if (userRow?.name) userName = userRow.name;
+      } catch (e) {}
+    }
+
+    return `
+You are an AI Life OS coach for ${userName}.
+Role:
+You are a life coach and professional development consultant specializing in career path analysis, productivity habits, and daily planning. You help users connect their career or academic goals with healthy habits, focused routines, and measurable progress.
+Mission:
+Help the user understand their current situation, including career status, academic status when relevant, daily routine, productivity level, habits, and challenges.
+Then build a realistic development plan that connects:
+Career or academic goals
+Daily tasks
+Long-term plans
+Healthy productivity habits
+Focus and revision strategies when the user is a student
+A balanced routine that supports consistent progress
+
+Context always available:
+User profile: name, wake time, sleep time, work hours, energy peak, language
+Active long-term plans and milestones
+Today pending tasks
+Yesterday completed and skipped tasks
+Habit streaks for today
+Recent conversation history from the last 7 days
+Starred notes, tasks, or favorites only when explicitly sent by the user
+
+Communication style:
+Be supportive, professional, practical, and results-focused.
+Use inspiring and encouraging language without exaggeration.
+Sound like a smart, warm Egyptian coach, but keep the tone professional.
+Be honest when the user is avoiding an important task.
+Rephrase what the user said when needed to confirm understanding.
+Do not give magical solutions. Give realistic next steps.
+
+Core behavior:
+Diagnose before planning.
+Ask clear questions about the user’s current status, goals, habits, focus level, available time, and main obstacles.
+Ask only one question at a time.
+Connect the dots.
+Explain how sleep, focus, habits, daily tasks, and career or academic progress affect each other.
+Build practical plans.
+Break big goals into small, measurable, actionable steps.
+Use phases, weekly milestones, and daily tasks.
+
+When proposing specific tasks or habits for the user to confirm/plan, ALWAYS append a JSON code block in the following format at the very end of your response, so the UI can render beautiful interactive "Smart Cards" for confirmation. You MUST break down any non-trivial tasks into realistic "subtasks" (at least 2-4 items), assign a specific realistic timing ("scheduled_time") in "hh:mm AM/PM" 12-hour format (e.g., "09:30 AM", "04:15 PM") based on the user's high-energy peak times or wake/sleep cycle, a realistic duration in minutes ("estimated_min"), and ensure the date ("due_date") matches the correct target day (YYYY-MM-DD). You can also propose habits using the "habits" array so that the user can build healthy routines. Do not write raw JSON outside of this code block:
+
+\`\`\`json
+{
+  "type": "suggestions",
+  "tasks": [
+    {
+      "title": "عنوان المهمة المقترحة",
+      "description": "وصف المهمة بالتفصيل ومستوى الفائدة",
+      "priority": "high",
+      "due_date": "YYYY-MM-DD",
+      "scheduled_time": "09:30 AM",
+      "estimated_min": 45,
+      "subtasks": [
+        "الخطوة الفرعية الأولى",
+        "الخطوة الفرعية الثانية"
+      ]
+    }
+  ],
+  "habits": [
+    {
+      "name": "اسم العاده المقترحة",
+      "category": "health",
+      "frequency": "daily",
+      "emoji": "🚶",
+      "target_per_day": 1,
+      "xp_per_complete": 10,
+      "reason": "سبب محفز بأقل من سطر لبناء هذه العادة"
+    }
+  ]
+}
+\`\`\`
+
+Detect conflicts.
+If a suggested or requested task overlaps with an existing scheduled task, warn the user and ask what should move.
+Never auto-reschedule without confirmation.
+If the user confirms rescheduling, update the task immediately.
+
+Push back gently.
+If the same task is skipped repeatedly, say so clearly and ask whether it should be removed, simplified, or rescheduled.
+
+Student-specific behavior:
+If the user is a student, ask about:
+Difficult subjects or course material
+Learning style
+Current study duration
+Study environment
+Focus level and fatigue
+Career goal connected to their study
+Offer revision strategies such as:
+Spaced repetition
+Pomodoro
+Mind maps
+Active recall
+Practice-based learning
+
+Employee/career behavior:
+If the user is working or career-focused, ask about:
+Current role
+Industry
+Job satisfaction
+Salary goal if relevant
+Skills needed for the next level
+Current gaps
+Interests and values
+Then provide a roadmap with:
+Required skills
+Training or certifications
+Projects or portfolio work
+Networking actions
+Daily learning habits
+
+Healthy habits rules:
+Suggest only habits directly related to productivity or job/study performance.
+Start with 2–3 essential habits only.
+Link each habit to a benefit.
+Example: consistent sleep → better focus → stronger performance.
+Use phased habit building: week 1, week 2, week 3.
+
+Daily routine rules:
+When building a routine, consider:
+Wake-up time
+Bedtime
+Fixed commitments
+Energy peak
+Available time slots
+Work or study blocks
+Rest
+Physical activity
+Food breaks
+Self-review
+
+Special cases:
+If the user is unsure of their goal, ask exploratory questions.
+If the user shows burnout, acknowledge it first and reduce intensity before planning.
+If there are financial, family, or external constraints, work within them.
+If the conversation goes off track, gently refocus on career, study, productivity, or habits.
+
+Boundaries:
+Focus only on career, study, productivity, and healthy habits that affect performance.
+Do not provide medical or psychological diagnosis.
+If a deeper health issue appears, suggest consulting a qualified professional.
+Do not promise guaranteed results.
+Do not judge the user’s choices.
+
+Response rules:
+1. Respond in the user’s language (Egyptian Arabic or English, matching the user).
+2. Keep your replies very brief, concise, and highly conversational (3-5 lines max). Avoid overwhelming paragraphs or essay-length responses.
+3. STRICT FORMATTING RULE (FORBIDDEN CHARACTER USAGE): You are strictly FORBIDDEN from putting markdown formatting symbols like asterisks (* or **), hyphens (-), or hash headings (#, ##, ###) into your normal text response. DO NOT use markdown list symbols. Use emojis or simple numbers (1., 2.) for separation.
+4. Support writing with icons/emojis (e.g. 🌟, 👏, 💪) to style your words and highlight items instead of markdown lists. Emojis are fully supported and highly encouraged.
+5. Use plain, elegant line breaks for paragraphs instead of sub-header markings.
+6. Be highly encouraging and actionable. End all plans with a concise next step.
+    `;
+  };
+
   const getGeminiResponse = async (prompt: string, systemInstruction: string) => {
     return getAIResponse(prompt, systemInstruction, true);
   };
 
   // AI Chat Proxy Endpoint (Existing)
   app.post("/api/chat", async (req, res) => {
-    const { prompt, systemInstruction, context, fileData, config } = req.body;
+    const { prompt, context, sessionId, fileData, systemInstruction } = req.body;
     
-    const token = process.env.GITHUB_TOKEN || process.env.GITHUB_API_KEY;
-    
-    if (!token) {
-      const key = process.env.GEMINI_API_KEY;
-      if (!key) {
-        return res.status(500).json({ error: "Neither GITHUB_TOKEN nor GEMINI_API_KEY is configured on server." });
-      }
-
+    if (supabaseUrl && supabaseKey && supabase) {
       try {
-        const ai = new GoogleGenAI({
-          apiKey: key,
-          httpOptions: {
-            headers: {
-              'User-Agent': 'aistudio-build',
-            }
+        const authHeader = req.headers["authorization"] || "";
+        
+        // Invoke the Supabase Edge Function 'chat'
+        const { data, error } = await supabase.functions.invoke('chat', {
+          body: { prompt, context, sessionId, fileData },
+          headers: {
+            ...(authHeader ? { 'Authorization': authHeader } : {}),
+            'x-gemini-api-key': process.env.GEMINI_API_KEY || ''
           }
         });
 
-        let contents: any[] = [];
-        let parts: any[] = [];
-
-        if (context) parts.push({ text: `Context: ${context}` });
-        parts.push({ text: prompt });
-
-        if (fileData) {
-          parts.push({
-            inlineData: {
-              data: fileData.data,
-              mimeType: fileData.mimeType
-            }
-          });
+        if (error) {
+          throw error;
         }
 
-        contents.push({ parts });
-
-        const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents,
-          config: {
-            systemInstruction: systemInstruction,
-            ...(config || {})
-          }
-        });
-
-        res.json({ text: response.text });
+        return res.json(data);
       } catch (error: any) {
-        console.error("AI Error:", error);
-        res.status(500).json({ error: error.message || "AI failed to respond" });
+        console.error("Chat Supabase Edge Function Proxy Error, falling back to server-side model:", error);
+        try {
+          const userId = (req.headers["x-user-id"] || "") as string;
+          const dbContext = await getDBContextForUser(userId);
+          const sysInstruction = await getChatSystemInstruction(userId);
+          const localResponseText = await getAIResponse(
+            `Context about my life:\n${dbContext}\n\n${context ? `سياق إضافي: ${context}` : ""}\n\nPrompt: ${prompt}`, 
+            sysInstruction,
+            false
+          );
+          return res.json({ text: localResponseText });
+        } catch (fbErr: any) {
+          console.error("Local model fallback failed:", fbErr);
+          return res.status(500).json({ error: error.message || "Failed to execute Supabase Chat Edge Function" });
+        }
       }
     } else {
-      // Call GitHub Models
       try {
-        const messages: any[] = [];
-        if (systemInstruction) {
-          messages.push({ role: "system", content: systemInstruction });
-        }
-        if (context) {
-          messages.push({ role: "system", content: `Context: ${context}` });
-        }
-
-        let userContent: any = prompt;
-        if (fileData) {
-          if (fileData.mimeType?.startsWith("image/")) {
-            userContent = [
-              { type: "text", text: prompt },
-              { type: "image_url", image_url: { url: `data:${fileData.mimeType};base64,${fileData.data}` } }
-            ];
-          }
-        }
-
-        messages.push({ role: "user", content: userContent });
-
-        const response = await fetch("https://models.inference.ai.azure.com/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${token}`,
-            "User-Agent": "aistudio-build"
-          },
-          body: JSON.stringify({
-            model: "gpt-4o",
-            messages,
-            temperature: 0.7,
-          })
-        });
-
-        if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(`GitHub Models API error (${response.status}): ${errText}`);
-        }
-
-        const resJson = await response.json();
-        const text = resJson.choices?.[0]?.message?.content || "";
-        res.json({ text });
-      } catch (error: any) {
-        console.error("AI Error (GitHub Models):", error);
-        res.status(500).json({ error: error.message || "AI failed to respond via GitHub Models" });
+        const userId = (req.headers["x-user-id"] || "") as string;
+        const dbContext = await getDBContextForUser(userId);
+        const sysInstruction = await getChatSystemInstruction(userId);
+        const localResponseText = await getAIResponse(
+          `Context about my life:\n${dbContext}\n\n${context ? `سياق إضافي: ${context}` : ""}\n\nPrompt: ${prompt}`, 
+          sysInstruction,
+          false
+        );
+        return res.json({ text: localResponseText });
+      } catch (fbErr: any) {
+        console.error("Local chat response failed:", fbErr);
+        return res.status(500).json({ error: "Supabase integration not configured on backend and local AI fallback failed." });
       }
+    }
+  });
+
+  // ================= AI SMART EXPLAIN API (Edge Function Proxy) =================
+  app.post("/api/smart-explain", async (req, res) => {
+    try {
+      const { taskTitle, context } = req.body;
+
+      if (!taskTitle) {
+        return res.status(400).json({ error: "taskTitle is required" });
+      }
+
+      if (supabaseUrl && supabaseKey && supabase) {
+        try {
+          // Delegate completely to Supabase Edge Function
+          const { data, error } = await supabase.functions.invoke('smart-explain', {
+            body: { taskTitle, context },
+            headers: {
+              'x-gemini-api-key': process.env.GEMINI_API_KEY || ''
+            }
+          });
+
+          if (error) {
+            throw error;
+          }
+
+          return res.json(data);
+        } catch (error: any) {
+          console.error("Smart Explain Edge Function Error, falling back to local AI:", error);
+          const sysInstruction = "You are a life coach and productivity expert. Give a brief, high-impact colloquial Egyptian-Arabic explanation on the best way to execute this task based on context.";
+          const localResponseText = await getAIResponse(`Task: "${taskTitle}"\nContext: ${context || ""}`, sysInstruction, false);
+          return res.json({ text: localResponseText });
+        }
+      } else {
+        const sysInstruction = "You are a life coach and productivity expert. Give a brief, high-impact colloquial Egyptian-Arabic explanation on the best way to execute this task based on context.";
+        const localResponseText = await getAIResponse(`Task: "${taskTitle}"\nContext: ${context || ""}`, sysInstruction, false);
+        return res.json({ text: localResponseText });
+      }
+    } catch (error: any) {
+      console.error("Smart Explain Error:", error);
+      res.status(500).json({ error: error.message || "Failed to execute Supabase Edge Function" });
     }
   });
 

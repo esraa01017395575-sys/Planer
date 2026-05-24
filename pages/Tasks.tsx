@@ -187,10 +187,10 @@ export const Tasks = ({ currentUser }: any) => {
 
     const newStatus = destination.droppableId;
     
-    // Check if task is moved from yesterday (draft) to todo column
-    const isMovingFromYesterdayToTodo = source.droppableId === "draft" && destination.droppableId === "todo";
+    // Check if task is moved from yesterday's pending column (draft) to any active column
+    const isMovingFromYesterday = source.droppableId === "draft" && destination.droppableId !== "draft";
     const updateData: any = { status: newStatus };
-    if (isMovingFromYesterdayToTodo) {
+    if (isMovingFromYesterday) {
       updateData.due_date = format(new Date(), "yyyy-MM-dd");
     }
 
@@ -267,21 +267,24 @@ export const Tasks = ({ currentUser }: any) => {
     const isShowingToday = isSameDay(selectedDate, new Date());
 
     result = result.filter((t) => {
+      const cleanDue = t.due_date ? String(t.due_date).trim().slice(0, 10) : null;
+      const cleanSched = t.daily_schedule ? String(t.daily_schedule).trim().slice(0, 10) : null;
+
       // 1. Exact date match (due_date or daily_schedule)
-      if (t.due_date === dateStr || t.daily_schedule === dateStr) {
+      if (cleanDue === dateStr || cleanSched === dateStr) {
         return true;
       }
 
       // 2. Overdue or no-due-date tasks if viewing today
       if (isShowingToday) {
         if (t.status !== "done" && t.status !== "cancelled") {
-          if (!t.due_date) return true; // No due date
-          if (t.due_date < dateStr) return true; // Overdue
+          if (!cleanDue) return true; // No due date
+          if (cleanDue < dateStr) return true; // Overdue
         }
       }
 
       // 3. Match creation date if no due date specified
-      if (!t.due_date && t.created_at && isSameDay(selectedDate, new Date(t.created_at))) {
+      if (!cleanDue && t.created_at && isSameDay(selectedDate, new Date(t.created_at))) {
         return true;
       }
 
@@ -458,8 +461,9 @@ export const Tasks = ({ currentUser }: any) => {
           <div className="flex-1 flex overflow-x-auto gap-8 min-h-0 pb-4 no-scrollbar scroll-smooth snap-x">
             {columns.map((column) => {
               const columnTasks = filteredTasks.filter((t) => {
-                const isOverdue = t.due_date && t.due_date < format(selectedDate, "yyyy-MM-dd") && t.status !== "done" && t.status !== "cancelled";
-                const hasNoDueDate = !t.due_date && t.status !== "done" && t.status !== "cancelled";
+                const cleanDue = t.due_date ? String(t.due_date).trim().slice(0, 10) : null;
+                const isOverdue = cleanDue && cleanDue < format(selectedDate, "yyyy-MM-dd") && t.status !== "done" && t.status !== "cancelled";
+                const hasNoDueDate = !cleanDue && t.status !== "done" && t.status !== "cancelled";
 
                 if (column.id === "draft") {
                   return t.status === "draft" || isOverdue || hasNoDueDate;
@@ -649,9 +653,12 @@ export const Tasks = ({ currentUser }: any) => {
                 calendarDates.push(addDays(start, i));
               }
               return calendarDates.map((date, idx) => {
-                const dayTasks = tasks.filter(
-                  (t) => t.due_date === format(date, "yyyy-MM-dd") || t.daily_schedule === format(date, "yyyy-MM-dd")
-                );
+                const targetStr = format(date, "yyyy-MM-dd");
+                const dayTasks = tasks.filter((t) => {
+                  const cleanDue = t.due_date ? String(t.due_date).trim().slice(0, 10) : null;
+                  const cleanSched = t.daily_schedule ? String(t.daily_schedule).trim().slice(0, 10) : null;
+                  return cleanDue === targetStr || cleanSched === targetStr;
+                });
                 const isCurrentMonth =
                   date.getMonth() === selectedDate.getMonth();
                 const isToday = isSameDay(date, new Date());

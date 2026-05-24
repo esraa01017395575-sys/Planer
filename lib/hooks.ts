@@ -554,6 +554,54 @@ export const useGetUserXP = () => {
   return { data, loading, isLoading: loading, refetch: fetchXP };
 };
 
+export const useGetProfile = () => {
+  const [data, setData] = useState<{ id: string; email: string; name: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchProfile = async () => {
+    try {
+      setLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setLoading(false);
+        return;
+      }
+
+      // Fetch from both tables to ensure complete fallback coverage
+      const { data: userRow } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      const { data: lifeRow } = await supabase
+        .from('life_profiles')
+        .select('*')
+        .eq('user_id', user.id)
+        .single();
+
+      setData({
+        id: user.id,
+        email: user.email || userRow?.email || lifeRow?.email || '',
+        name: userRow?.name || lifeRow?.name || 'Israa',
+        wake_time: lifeRow?.wake_time || '07:00:00',
+        sleep_time: lifeRow?.sleep_time || '23:00:00',
+        energy_peak: lifeRow?.energy_peak || 'morning'
+      });
+    } catch (err) {
+      console.error('Error fetching profile:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchProfile();
+  }, []);
+
+  return { data, loading, isLoading: loading, refetch: fetchProfile };
+};
+
 export const useCompleteTask = () => {
   const completeTask = async ({ id }: { id: string }, options?: { onSuccess?: () => void, onError?: (err: any) => void }) => {
     try {
@@ -1233,58 +1281,69 @@ export const useGetChatMessages = (sessionId: string | null) => {
   return { data, loading, refetch: fetchMessages };
 };
 
+const saveQueues: { [sessionId: string]: Promise<any> } = {};
+
 export const useSaveChatMessage = () => {
   const saveMessage = async (sessionId: string, role: 'user' | 'model', content: string) => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      if (sessionId.startsWith('temp_')) {
-        const local = localStorage.getItem('ai_chat_sessions');
-        if (local) {
-          const list = JSON.parse(local);
-          const sIdx = list.findIndex((item: any) => item.id === sessionId);
-          if (sIdx !== -1) {
-            if (!list[sIdx].messages) list[sIdx].messages = [];
-            list[sIdx].messages.push({ role, content, created_at: new Date().toISOString() });
-            localStorage.setItem('ai_chat_sessions', JSON.stringify(list));
-          }
-        }
-        return;
-      }
-
-      const { data: row, error: fetchErr } = await supabase
-        .from('chat_messages')
-        .select('content, provider')
-        .eq('id', sessionId)
-        .single();
-
-      if (!fetchErr && row) {
-        let parsed = { title: 'Chat', messages: [] as any[] };
-        try {
-          parsed = JSON.parse(row.content);
-        } catch (e) {
-          parsed = { title: row.provider || 'Chat', messages: [] };
-        }
-
-        if (!parsed.messages) parsed.messages = [];
-        
-        parsed.messages.push({
-          role,
-          content,
-          created_at: new Date().toISOString()
-        });
-
-        await supabase
-          .from('chat_messages')
-          .update({
-            content: JSON.stringify(parsed)
-          })
-          .eq('id', sessionId);
-      }
-    } catch (e) {
-      console.error("Exception in useSaveChatMessage:", e);
+    if (!saveQueues[sessionId]) {
+      saveQueues[sessionId] = Promise.resolve();
     }
+
+    const nextPromise = saveQueues[sessionId].then(async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        if (sessionId.startsWith('temp_')) {
+          const local = localStorage.getItem('ai_chat_sessions');
+          if (local) {
+            const list = JSON.parse(local);
+            const sIdx = list.findIndex((item: any) => item.id === sessionId);
+            if (sIdx !== -1) {
+              if (!list[sIdx].messages) list[sIdx].messages = [];
+              list[sIdx].messages.push({ role, content, created_at: new Date().toISOString() });
+              localStorage.setItem('ai_chat_sessions', JSON.stringify(list));
+            }
+          }
+          return;
+        }
+
+        const { data: row, error: fetchErr } = await supabase
+          .from('chat_messages')
+          .select('content, provider')
+          .eq('id', sessionId)
+          .single();
+
+        if (!fetchErr && row) {
+          let parsed = { title: 'Chat', messages: [] as any[] };
+          try {
+            parsed = JSON.parse(row.content);
+          } catch (e) {
+            parsed = { title: row.provider || 'Chat', messages: [] };
+          }
+
+          if (!parsed.messages) parsed.messages = [];
+          
+          parsed.messages.push({
+            role,
+            content,
+            created_at: new Date().toISOString()
+          });
+
+          await supabase
+            .from('chat_messages')
+            .update({
+              content: JSON.stringify(parsed)
+            })
+            .eq('id', sessionId);
+        }
+      } catch (e) {
+        console.error("Exception in useSaveChatMessage:", e);
+      }
+    });
+
+    saveQueues[sessionId] = nextPromise;
+    return nextPromise;
   };
   return { mutate: saveMessage };
 };

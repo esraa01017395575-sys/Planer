@@ -5,12 +5,14 @@ import {
   Bot, Loader2, Paperclip, Sparkles, 
   Trash2, MessageSquare, Info, Brain, Check, X, 
   ArrowRight, ArrowBigRightDash, Edit2, Plus, History,
-  Layout
+  Layout, Clock, List
 } from 'lucide-react';
 import { format } from 'date-fns';
+import { supabase } from '../lib/supabase';
 import { useAppContext } from '../context/AppContext';
 import { 
   useGetTasks, useGetHabits, useGetDailySchedule, useCreateTask,
+  useCreateHabit,
   useGetChatSessions, useCreateChatSession, useDeleteChatSession, 
   useUpdateChatSession, useGetChatMessages, useSaveChatMessage
 } from '../lib/hooks';
@@ -56,36 +58,34 @@ export const Chat = () => {
     }
   }, []);
 
-  const { data: tasks } = useGetTasks();
-  const { data: habits } = useGetHabits();
-  const { data: schedule } = useGetDailySchedule();
+  const { data: tasks, refetch: refetchTasks } = useGetTasks();
+  const { data: habits, refetch: refetchHabits } = useGetHabits();
+  const { data: schedule, refetch: refetchSchedule } = useGetDailySchedule();
   const { mutate: createTask } = useCreateTask();
+  const { mutate: createHabit } = useCreateHabit();
 
   const getSystemInstruction = () => `
 You are AI Coach Pro, a high-performance life coach and productivity expert.
 Your goal is to help the user achieve their best self through actionable advice, task organization, and habit tracking.
 
-Style: Warm, honest, direct, and challenging. Do not be overly flattering.
-Current Site Language: ${language === 'en' ? 'English' : 'Arabic'}. 
-ALWAYS respond in ${language === 'en' ? 'English' : 'Arabic'} unless the user specifically asks to switch.
+Style: Warm, honest, witty, encouraging, and direct. Do not be overly flattering.
+Language: ALWAYS respond in ${language === 'en' ? 'English' : 'Arabic'}. 
+If in Arabic mode: ALWAYS respond in warm, witty, clever colloquial Egyptian Arabic (اللهجة المصرية العامية المحببة والذكية والكوميدية أحياناً والمشجعة جداً). NEVER use standard classical Arabic (الفصحى). Use words like 'يا بطل', 'عاش يا وحش', 'جامد جداً', 'ولا تشيل هم', 'تمام كدا يا صاحبي', 'يلا بينا'. Keep responses highly organic and friendly.
 
 Context Awareness:
 You have access to the user's current tasks, habits, and schedule. Use this data to provide personalized advice.
 If the user asks to organize their day, suggest specific times based on their current schedule.
 If a task is too big, suggest breaking it down into subtasks.
 
-TASK SUGGESTIONS:
-When appropriate (e.g., when the user asks for a plan, or when you see a gap in their schedule), suggest specific tasks.
-IMPORTANT: Wrap your task suggestions in a JSON block like this at the end of your message:
-\`\`\`json
-{
-  "type": "task_suggestions",
-  "tasks": [
-    { "title": "Task Name", "description": "Why this is important", "priority": "high" | "medium" | "low", "due_date": "YYYY-MM-DD" }
-  ]
-}
-\`\`\`
-Ensure the due_date matches the date discussed or today (${format(new Date(), 'yyyy-MM-dd')}).
+EDGE FUNCTIONS & AI TOOLS:
+You have access to critical tools to execute database operations on the user's life OS in real-time. Call these tools immediately whenever the user asks for these actions:
+- create_task: Add a task (e.g., when they want to plan a task).
+- update_task_status: Change status of an existing task (e.g., when they completed a task or moved to in-progress).
+- create_habit: Create a habit to track.
+- log_habit_completion: Log habit completed.
+- create_goal: Create a long-term goal.
+
+If you invoke a tool, explain the success of the tool in colloquial Egyptian Arabic directly inside the final chat response. Do not explain technical detail, just say that you did it happily, e.g. "تمام يا بطل أضفتلك المهمة بنجاح!"
 
 Functionality:
 - Suggest Pomodoro sessions (25/5 or 50/10).
@@ -113,19 +113,93 @@ Functionality:
   const [editTitle, setEditTitle] = useState('');
   const [showSidebar, setShowSidebar] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
+  const [triggeredWelcomeSessions, setTriggeredWelcomeSessions] = useState<Set<string>>(new Set());
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const lastLoadedSessionIdRef = useRef<string | null>(null);
+
+  const triggerDynamicWelcome = async (sessionId: string) => {
+    if (isLoading) return;
+    setIsLoading(true);
+    try {
+      const context = `
+        Current Tasks: ${JSON.stringify(tasks?.map(t => ({ title: t.title, status: t.status })))}
+        Current Habits: ${JSON.stringify(habits?.map(h => ({ name: h.name, streak: h.current_streak })))}
+        Today's Schedule: ${JSON.stringify(schedule?.map(s => ({ title: s.task?.title, time: s.start_time })))}
+      `;
+
+      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-user-id': user?.id || '',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          prompt: "initiate_chat_welcome",
+          systemInstruction: getSystemInstruction(),
+          context
+        })
+      });
+
+      if (!response.ok) throw new Error('Welcome API request failed');
+      const data = await response.json();
+      const aiResponse = data.text || (language === 'ar' ? 'مرحباً! أنا مدربك الذكي.' : 'Hello! I am your AI Coach.');
+
+      setMessages([{ role: 'model', content: aiResponse, timestamp: new Date() }]);
+      saveMessage(sessionId, 'model', aiResponse).then(() => {
+        refetchMessages();
+        refetchSessions();
+      }).catch(err => {
+        console.error("Failed to save dynamic welcome response:", err);
+        refetchSessions();
+      });
+
+    } catch (err) {
+      console.error('Failed to trigger dynamic welcome:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (sessionMessages && currentSessionId) {
-      setMessages(sessionMessages.map(m => ({
-        role: m.role,
-        content: m.content,
-        created_at: m.created_at
-      })));
+      if (lastLoadedSessionIdRef.current !== currentSessionId || (!isLoading && sessionMessages.length > 0)) {
+        setMessages(sessionMessages.map(m => ({
+          role: m.role,
+          content: m.content,
+          created_at: m.created_at
+        })));
+        lastLoadedSessionIdRef.current = currentSessionId;
+      }
+
+      // Trigger dynamic welcome message if this session has 0 messages and has not been triggered yet
+      if (sessionMessages.length === 0 && !isLoading && !triggeredWelcomeSessions.has(currentSessionId)) {
+        setTriggeredWelcomeSessions(prev => {
+          const updated = new Set(prev);
+          updated.add(currentSessionId);
+          return updated;
+        });
+        triggerDynamicWelcome(currentSessionId);
+      }
     }
-  }, [sessionMessages, currentSessionId]);
+  }, [sessionMessages, currentSessionId, isLoading, triggeredWelcomeSessions]);
+
+  // Auto-select the last active session on load if none is selected and no prompt query is present
+  useEffect(() => {
+    if (sessions && sessions.length > 0 && !currentSessionId) {
+      const params = new URLSearchParams(window.location.search);
+      const prompt = params.get('prompt');
+      if (!prompt) {
+        setCurrentSessionId(sessions[0].id);
+      }
+    }
+  }, [sessions, currentSessionId]);
 
   const scrollToBottom = () => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -140,8 +214,6 @@ Functionality:
       onSuccess: (newSession) => {
         setCurrentSessionId(newSession.id);
         refetchSessions();
-        // Send initial AI message
-        saveMessage(newSession.id, 'model', language === 'ar' ? INITIAL_AI_MESSAGE_AR : INITIAL_AI_MESSAGE_EN);
       }
     });
   };
@@ -200,22 +272,75 @@ Functionality:
         };
       }
 
-      // 3. Request Gemini API through backend proxy
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: userMessage,
-          systemInstruction: getSystemInstruction(),
-          context,
-          fileData: filePayload
-        })
-      });
+      // 3. Request Gemini API through backend proxy (or direct smart-explain edge API)
+      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      
+      const isSmartExplain = userMessage.toLowerCase().includes('how to do it in best way:');
+      
+      let response;
+      if (isSmartExplain) {
+        const match = userMessage.match(/how to do it in best way:\s*"(.*)"/i) || userMessage.match(/how to do it in best way:\s*(.*)/i);
+        const taskTitle = match ? match[1] : userMessage;
+
+        response = await fetch('/api/smart-explain', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'x-user-id': user?.id || '',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({
+            taskTitle: taskTitle.trim(),
+            context
+          })
+        });
+      } else {
+        response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'x-user-id': user?.id || '',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({
+            prompt: userMessage,
+            systemInstruction: getSystemInstruction(),
+            context,
+            fileData: filePayload
+          })
+        });
+      }
 
       if (!response.ok) throw new Error('API request failed');
       const data = await response.json();
       const aiResponse = data.text || (language === 'ar' ? 'عذراً، لم أستطع معالجة طلبك.' : 'Sorry, I could not process your request.');
       
+      // Check if any database actions were taken by the AI Edge Functions / Tools
+      if (data.actions_taken && data.actions_taken.length > 0) {
+        let refetchedTasksFlag = false;
+        let refetchedHabitsFlag = false;
+
+        data.actions_taken.forEach((action: any) => {
+          if (action.type === 'create_task' || action.type === 'update_task') {
+            refetchedTasksFlag = true;
+          } else if (action.type === 'create_habit' || action.type === 'log_habit') {
+            refetchedHabitsFlag = true;
+          }
+        });
+
+        if (refetchedTasksFlag) refetchTasks(true);
+        if (refetchedHabitsFlag) refetchHabits(true);
+        refetchSchedule(true);
+
+        // Notify the user elegantly that action was performed in background
+        const actionMsg = language === 'ar' 
+          ? `✨ تم التحديث تلقائياً: قام الذكاء الاصطناعي بتنفيذ الإجراء بنجاح!` 
+          : `✨ System Auto-Updated: AI performed action successfully!`;
+        addNotification(actionMsg, 'success');
+      }
+
       // 4. Update local state with Gemini's response immediately
       setMessages(prev => [...prev, { role: 'model', content: aiResponse, timestamp: new Date() }]);
       
@@ -254,17 +379,43 @@ Functionality:
   };
 
   const [acceptedTaskIds, setAcceptedTaskIds] = useState<Set<string>>(new Set());
+  const [acceptedHabitIds, setAcceptedHabitIds] = useState<Set<string>>(new Set());
 
   const parseSuggestions = (content: string) => {
+    if (!content) return { cleanContent: '', suggestions: null };
     try {
-      const jsonMatch = content.match(/```json\n([\s\S]*?)\n```/);
-      if (jsonMatch && jsonMatch[1]) {
-        const data = JSON.parse(jsonMatch[1]);
-        if (data.type === 'task_suggestions' && Array.isArray(data.tasks)) {
-          return {
-            cleanContent: content.replace(jsonMatch[0], '').trim(),
-            suggestions: data.tasks
-          };
+      const jsonRegex = /```(?:json)?\s*([\s\S]*?)\s*```/gi;
+      let match;
+      while ((match = jsonRegex.exec(content)) !== null) {
+        try {
+          const possibleJson = match[1].trim();
+          const decoded = JSON.parse(possibleJson);
+          if (decoded) {
+            // Check if it's the new consolidated multiple-type suggestions schema
+            if (decoded.type === 'suggestions' || Array.isArray(decoded.tasks) || Array.isArray(decoded.habits)) {
+              const clean = content.replace(match[0], '').trim();
+              return {
+                cleanContent: clean,
+                suggestions: {
+                  tasks: Array.isArray(decoded.tasks) ? decoded.tasks : [],
+                  habits: Array.isArray(decoded.habits) ? decoded.habits : []
+                }
+              };
+            }
+            // Check if it's the legacy schema (backward compatibility)
+            if (decoded.type === 'task_suggestions' && Array.isArray(decoded.tasks)) {
+              const clean = content.replace(match[0], '').trim();
+              return {
+                cleanContent: clean,
+                suggestions: {
+                  tasks: decoded.tasks,
+                  habits: []
+                }
+              };
+            }
+          }
+        } catch (e) {
+          // Ignore and check next codeblock
         }
       }
     } catch (e) {
@@ -274,12 +425,29 @@ Functionality:
   };
 
   const handleAcceptTask = (task: any, suggestionIdx: number, messageIdx: number) => {
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    let taskDueDate = task.due_date;
+    if (
+      !taskDueDate || 
+      taskDueDate === 'YYYY-MM-DD' || 
+      taskDueDate === 'yyyy-MM-dd' || 
+      String(taskDueDate).trim().slice(0, 10) < todayStr ||
+      !/^\d{4}-\d{2}-\d{2}/.test(String(taskDueDate))
+    ) {
+      taskDueDate = todayStr;
+    } else {
+      taskDueDate = String(taskDueDate).trim().slice(0, 10);
+    }
+
     createTask({
       data: {
         title: task.title,
         description: task.description,
         priority: task.priority || 'medium',
-        due_date: task.due_date || format(new Date(), 'yyyy-MM-dd'),
+        due_date: taskDueDate,
+        scheduled_time: task.scheduled_time || null,
+        estimated_min: parseInt(task.estimated_min || task.duration) || 25,
+        subtasks: Array.isArray(task.subtasks) ? task.subtasks : [],
         status: 'todo',
         category: 'work',
         xp_reward: 20
@@ -288,6 +456,27 @@ Functionality:
       onSuccess: () => {
         addNotification(t('task_added'), 'success');
         setAcceptedTaskIds(prev => new Set(prev).add(`${messageIdx}-${suggestionIdx}`));
+      }
+    });
+  };
+
+  const handleAcceptHabit = (habit: any, suggestionIdx: number, messageIdx: number) => {
+    createHabit({
+      data: {
+        name: habit.name || habit.title,
+        category: habit.category || 'health',
+        frequency: habit.frequency || 'daily',
+        target_per_day: habit.target_per_day || 1,
+        xp_per_complete: habit.xp_per_complete || 10,
+        reminder_time: habit.reminder_time || null,
+        emoji: habit.emoji || '✨',
+        is_active: true
+      }
+    }, {
+      onSuccess: () => {
+        addNotification(t('habit_created') || 'Habit created successfully', 'success');
+        setAcceptedHabitIds(prev => new Set(prev).add(`${messageIdx}-${suggestionIdx}`));
+        refetchHabits(true);
       }
     });
   };
@@ -328,7 +517,7 @@ Functionality:
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 lg:px-8 xl:px-12 pt-16 space-y-8 pb-40 no-scrollbar">
+        <div className="flex-1 overflow-y-auto px-4 lg:px-8 xl:px-12 pt-16 space-y-8 pb-28 no-scrollbar">
           {messages.length === 0 && !isLoading && (
             <div className="flex flex-col items-center justify-center h-full text-center py-12">
               <div className="relative mb-8">
@@ -378,19 +567,24 @@ Functionality:
 
                   {suggestions && msg.role === 'model' && (
                     <div className="grid grid-cols-1 gap-3 ml-4">
-                      {suggestions.map((task: any, sIdx: number) => {
+                      {/* Task Suggestions */}
+                      {suggestions.tasks && suggestions.tasks.map((task: any, sIdx: number) => {
                         const isAccepted = acceptedTaskIds.has(`${idx}-${sIdx}`);
                         return (
                           <motion.div 
-                            key={sIdx}
+                            key={`task-${sIdx}`}
                             initial={{ scale: 0.95, opacity: 0 }}
                             animate={{ scale: 1, opacity: 1 }}
                             className="bg-bg-card border border-border rounded-2xl p-4 shadow-lg flex items-center justify-between gap-4"
                           >
                             <div className="flex-1">
+                              <span className="text-[9px] font-bold text-accent uppercase tracking-wider mb-1 block">
+                                📝 {language === 'ar' ? 'مهمة مقترحة' : 'Suggested Task'}
+                              </span>
                               <h4 className="font-bold text-sm text-text-primary">{task.title}</h4>
                               <p className="text-[10px] text-text-secondary line-clamp-1">{task.description}</p>
-                              <div className="flex items-center gap-2 mt-1">
+                              
+                              <div className="flex flex-wrap items-center gap-2 mt-1.5">
                                 <span className="text-[8px] font-bold uppercase py-0.5 px-1.5 rounded bg-bg-secondary text-text-secondary border border-border">
                                   {task.due_date}
                                 </span>
@@ -401,7 +595,29 @@ Functionality:
                                 }`}>
                                   {task.priority}
                                 </span>
+                                {task.scheduled_time && (
+                                  <span className="flex items-center gap-1 text-[8px] font-bold uppercase py-0.5 px-1.5 rounded bg-bg-secondary text-text-secondary border border-border">
+                                    <Clock className="w-2.5 h-2.5" />
+                                    {task.scheduled_time}
+                                  </span>
+                                )}
+                                {(task.estimated_min || task.duration) && (
+                                  <span className="text-[8px] font-bold uppercase py-0.5 px-1.5 rounded bg-bg-secondary text-text-secondary border border-border">
+                                    {task.estimated_min || task.duration} {language === 'ar' ? 'دقيقة' : 'mins'}
+                                  </span>
+                                )}
                               </div>
+
+                              {task.subtasks && Array.isArray(task.subtasks) && task.subtasks.length > 0 && (
+                                <div className="mt-2.5 pl-2.5 border-l-2 border-accent/30 space-y-1">
+                                  {task.subtasks.map((st: any, stIdx: number) => (
+                                    <div key={stIdx} className="flex items-center gap-1.5 text-[10px] text-text-secondary font-semibold">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+                                      <span>{typeof st === 'string' ? st : (st.title || st.name)}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                             <button
                               disabled={isAccepted}
@@ -417,10 +633,58 @@ Functionality:
                           </motion.div>
                         );
                       })}
-                      {!suggestions.every((_, sIdx) => acceptedTaskIds.has(`${idx}-${sIdx}`)) && (
+
+                      {/* Habit Suggestions */}
+                      {suggestions.habits && suggestions.habits.map((habit: any, sIdx: number) => {
+                        const isAccepted = acceptedHabitIds.has(`${idx}-${sIdx}`);
+                        return (
+                          <motion.div 
+                            key={`habit-${sIdx}`}
+                            initial={{ scale: 0.95, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            className="bg-bg-card border border-border rounded-2xl p-4 shadow-lg flex items-center justify-between gap-4"
+                          >
+                            <div className="flex-1">
+                              <span className="text-[9px] font-bold text-emerald-500 uppercase tracking-wider mb-1 block">
+                                ✨ {language === 'ar' ? 'عادة مقترحة' : 'Suggested Habit'}
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xl">{habit.emoji || '✨'}</span>
+                                <h4 className="font-bold text-sm text-text-primary">{habit.name || habit.title}</h4>
+                              </div>
+                              {habit.reason && <p className="text-[10px] text-text-secondary mt-1">{habit.reason}</p>}
+                              
+                              <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                                <span className="text-[8px] font-bold uppercase py-0.5 px-1.5 rounded bg-bg-secondary text-text-secondary border border-border">
+                                  {habit.frequency === 'weekly' ? (language === 'ar' ? 'أسبوعي' : 'Weekly') : (language === 'ar' ? 'يومي' : 'Daily')}
+                                </span>
+                                <span className="text-[8px] font-bold uppercase py-0.5 px-1.5 rounded bg-bg-secondary text-text-secondary border border-border">
+                                  {habit.category === 'health' ? (language === 'ar' ? 'صحة' : 'Health') :
+                                   habit.category === 'learning' ? (language === 'ar' ? 'تعلم' : 'Learning') :
+                                   habit.category === 'work' ? (language === 'ar' ? 'عمل' : 'Work') :
+                                   (language === 'ar' ? 'أخرى' : 'Other')}
+                                </span>
+                              </div>
+                            </div>
+                            <button
+                              disabled={isAccepted}
+                              onClick={() => handleAcceptHabit(habit, sIdx, idx)}
+                              className={`flex-shrink-0 w-12 h-12 rounded-xl flex items-center justify-center transition-all ${
+                                isAccepted 
+                                  ? 'bg-emerald-500 text-white cursor-default' 
+                                  : 'bg-accent/10 text-accent hover:bg-accent hover:text-white border border-accent/20'
+                              }`}
+                            >
+                              {isAccepted ? <Check className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
+                            </button>
+                          </motion.div>
+                        );
+                      })}
+
+                      {suggestions.tasks && suggestions.tasks.length > 0 && !suggestions.tasks.every((_, sIdx) => acceptedTaskIds.has(`${idx}-${sIdx}`)) && (
                         <button
                           onClick={() => {
-                            suggestions.forEach((task: any, sIdx: number) => {
+                            suggestions.tasks.forEach((task: any, sIdx: number) => {
                               if (!acceptedTaskIds.has(`${idx}-${sIdx}`)) {
                                 handleAcceptTask(task, sIdx, idx);
                               }
@@ -428,7 +692,7 @@ Functionality:
                           }}
                           className="text-[10px] font-bold text-accent hover:underline text-left mt-1"
                         >
-                          {language === 'ar' ? 'الموافقة على الكل' : 'Accept all suggestions'}
+                          {language === 'ar' ? 'الموافقة على جميع المهام' : 'Accept all tasks'}
                         </button>
                       )}
                     </div>
@@ -452,11 +716,11 @@ Functionality:
         </div>
 
         {/* Input area */}
-        <div className="absolute bottom-4 lg:bottom-6 left-4 lg:left-6 right-4 lg:right-6">
-          <div className="max-w-4xl mx-auto glass-card rounded-[2rem] p-2 border border-border bg-bg-card/90 backdrop-blur-2xl shadow-2xl flex items-end gap-2 transition-all focus-within:border-accent/40">
-            <label className="p-3 lg:p-4 rounded-xl lg:rounded-2xl bg-bg-secondary text-text-secondary hover:text-accent transition-all cursor-pointer">
+        <div className="absolute bottom-3 lg:bottom-4 left-3 lg:left-4 right-3 lg:right-4">
+          <div className="max-w-4xl mx-auto rounded-3xl p-1 bg-bg-card/90 backdrop-blur-xl border-none shadow-xl flex items-end gap-2 transition-all shadow-black/10 focus-within:ring-1 focus-within:ring-accent/30">
+            <label className="p-2 w-10 h-10 flex items-center justify-center rounded-2xl bg-bg-secondary text-text-secondary hover:text-accent transition-all cursor-pointer flex-shrink-0">
               <input type="file" className="hidden" onChange={e => setAttachedFile(e.target.files?.[0] || null)} />
-              <Paperclip className="w-5 h-5 lg:w-6 lg:h-6" />
+              <Paperclip className="w-5 h-5" />
             </label>
             <textarea
               ref={inputRef}
@@ -469,19 +733,19 @@ Functionality:
                 }
               }}
               placeholder={language === 'ar' ? "اسألي عن أي شيء أو شاركي خطتك..." : "Ask anything or share your plan..."}
-              className="flex-1 bg-transparent border-none focus:ring-0 text-text-primary placeholder-text-secondary py-3 resize-none min-h-[50px] max-h-32 font-medium text-base lg:text-lg outline-none"
+              className="flex-1 bg-transparent border-none focus:ring-0 text-text-primary placeholder-text-secondary py-2.5 px-2 resize-none min-h-[40px] max-h-32 font-medium text-base outline-none"
               rows={1}
             />
             <button
               onClick={handleSendMessage}
               disabled={(!inputMessage.trim() && !attachedFile) || isLoading}
-              className={`p-3 lg:p-4 rounded-xl lg:rounded-2xl transition-all ${
+              className={`p-2.5 w-10 h-10 flex items-center justify-center rounded-2xl transition-all flex-shrink-0 ${
                 inputMessage.trim() || attachedFile
                   ? 'bg-accent text-white shadow-lg shadow-accent/20 hover:scale-105'
                   : 'bg-bg-secondary text-text-secondary'
               }`}
             >
-              <ArrowRight className="w-7 h-7" />
+              <ArrowRight className="w-5 h-5" />
             </button>
           </div>
           {attachedFile && (

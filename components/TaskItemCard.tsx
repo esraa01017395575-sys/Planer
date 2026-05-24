@@ -10,9 +10,12 @@ import {
   RotateCcw,
   Play,
   MoreHorizontal,
+  Sparkles,
 } from "lucide-react";
 import { format, parseISO } from "date-fns";
+import { formatTime12h } from "../lib/utils";
 import { Draggable } from "@hello-pangea/dnd";
+import { useLocation } from "wouter";
 import { useAppContext } from "../context/AppContext";
 import {
   useGetFavorites,
@@ -42,6 +45,7 @@ export const TaskItemCard: React.FC<TaskItemCardProps> = ({
   projectMap,
 }) => {
   const { t, language, addNotification } = useAppContext();
+  const [, setLocation] = useLocation();
   const { data: favoritesData, refetch: refetchFavorites } = useGetFavorites();
   const { toggleFavorite } = useToggleFavorite();
   const { mutate: deleteTask } = useDeleteTask();
@@ -125,6 +129,18 @@ export const TaskItemCard: React.FC<TaskItemCardProps> = ({
 
               <div className="flex items-center gap-1.5 shrink-0 ml-2">
                 <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const promptText = `how to do it in best way: "${task.title}"`;
+                    setLocation(`/chat?prompt=${encodeURIComponent(promptText)}`);
+                  }}
+                  className="p-1 text-text-secondary hover:text-accent transition-colors"
+                  title={language === "ar" ? "كيفية التنفيذ بأفضل طريقة (ذكاء اصطناعي)" : "How to do this task in the best way (AI)"}
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-accent animate-pulse" />
+                </button>
+                <button
                   onClick={handleToggleFavorite}
                   className={`p-1 transition-colors ${
                     isFavorited(task.id)
@@ -156,12 +172,7 @@ export const TaskItemCard: React.FC<TaskItemCardProps> = ({
               <div className="flex items-center gap-1.5 text-text-secondary">
                 <Clock className="w-3.5 h-3.5" />
                 <span className="text-xs font-mono font-bold">
-                  {task.scheduled_time
-                    ? format(
-                        parseISO(`2000-01-01T${task.scheduled_time}`),
-                        "hh:mm a"
-                      )
-                    : "09:00 AM"}
+                  {formatTime12h(task.scheduled_time)}
                 </span>
               </div>
               <div className="flex items-center gap-1.5 text-text-secondary">

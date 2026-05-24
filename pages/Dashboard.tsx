@@ -7,10 +7,12 @@ import {
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { format, isBefore, startOfToday, addDays, parseISO } from 'date-fns';
+import { formatTime12h } from '../lib/utils';
 import { 
   useGetDailySchedule, useGetHabits, useGetDailyQuote, 
   useGetUserXP, useGetTasks, useCompleteHabit, 
-  useUpdateTask, useDeleteTask, useToggleFavorite, useGetFavorites
+  useUpdateTask, useDeleteTask, useToggleFavorite, useGetFavorites,
+  useGetProfile
 } from '../lib/hooks';
 import { useAppContext } from '../context/AppContext';
 import { LoadingState, SkeletonCard } from '../components/ui/LoadingState';
@@ -25,6 +27,7 @@ export const Dashboard = () => {
   const { data: quote, loading: loadQuote } = useGetDailyQuote();
   const { data: userXP } = useGetUserXP();
   const { data: favorites } = useGetFavorites();
+  const { data: profile, loading: loadProfile } = useGetProfile();
 
   const { mutate: completeHabit } = useCompleteHabit();
   const { mutate: updateTask } = useUpdateTask();
@@ -39,10 +42,10 @@ export const Dashboard = () => {
   const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   useEffect(() => {
-    if (!loadSchedule && !loadHabits && !loadTasks) {
+    if (!loadSchedule && !loadHabits && !loadTasks && !loadProfile) {
       setIsInitialLoad(false);
     }
-  }, [loadSchedule, loadHabits, loadTasks]);
+  }, [loadSchedule, loadHabits, loadTasks, loadProfile]);
 
   const handleReschedule = (task: any, option: '24h' | 'tomorrow' | 'next_week' | 'calendar' | 'delete') => {
     if (option === 'delete') {
@@ -115,7 +118,7 @@ export const Dashboard = () => {
             <span className="text-xs font-bold uppercase tracking-widest">Life OS Dashboard</span>
           </div>
           <h1 className="text-4xl font-display font-bold text-text-primary tracking-tight">
-            {t('good_morning')}, <span className="text-gradient">Israa</span> 👋
+            {t('good_morning')}, <span className="text-gradient">{profile?.name || "Israa"}</span> 👋
           </h1>
           <p className="text-text-secondary mt-2 flex items-center gap-2">
             <Calendar className="w-4 h-4" />
@@ -264,7 +267,7 @@ export const Dashboard = () => {
                             {task.title} 
                             <span className="text-accent ml-2 font-mono text-xs">
                               {task.start_time 
-                                ? format(parseISO(`2000-01-01T${task.start_time}`), 'hh:mm a')
+                                ? formatTime12h(task.start_time)
                                 : ''
                               }
                             </span>
