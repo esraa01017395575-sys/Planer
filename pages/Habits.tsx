@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAppContext } from '../context/AppContext';
 import { useGetHabits, useCompleteHabit, useCreateHabit, useDeleteHabit, useUpdateHabit } from '../lib/hooks';
+import { formatTime12h } from '../lib/utils';
 import { 
   Plus, Flame, Trophy, X, Check, Loader2, Pencil, Trash2, Bell, BellOff,
   Droplet, BookOpen, Dumbbell, Brain, Heart, Sun, Moon, Apple, Target,
@@ -78,48 +79,6 @@ export const Habits = () => {
   const [confirmDel, setConfirmDel] = useState<any>(null);
 
   const habits = habitsData || [];
-
-  // Notification logic from reference
-  const fired = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (typeof window === "undefined" || !("Notification" in window)) return;
-    
-    if (Notification.permission === 'default') {
-        Notification.requestPermission();
-    }
-
-    const check = () => {
-      const now = new Date();
-      const todayKey = now.toISOString().slice(0, 10);
-      habits.forEach((h: any) => {
-        if (!h.reminder_time || !h.reminders || h.reminders.length === 0) return;
-        if (h.last_completed_on === todayKey) return;
-        
-        const [hh, mm] = h.reminder_time.split(":").map(Number);
-        const targetTime = new Date(now);
-        targetTime.setHours(hh, mm, 0, 0);
-        
-        h.reminders.forEach((mins: number) => {
-          const fireAt = new Date(targetTime.getTime() - mins * 60_000);
-          const key = `${h.id}:${todayKey}:${mins}`;
-          if (fired.current.has(key)) return;
-          
-          const diff = now.getTime() - fireAt.getTime();
-          if (diff >= 0 && diff < 120_000) {
-            const body = mins === 0 ? "It's time now!" : `Starts in ${mins} min`;
-            if (Notification.permission === "granted") {
-              new Notification(h.title, { body, tag: key });
-            }
-            addNotification(`${h.title} — ${body}`, 'info');
-            fired.current.add(key);
-          }
-        });
-      });
-    };
-    
-    const id = setInterval(check, 20_000);
-    return () => clearInterval(id);
-  }, [habits, addNotification]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -284,7 +243,7 @@ export const Habits = () => {
                        <span className="flex items-center gap-1 opacity-50"><Trophy size={14} /> {h.best_streak || 0}</span>
                        <span className="text-accent">+20 XP</span>
                        {h.reminder_time && (
-                         <span className="flex items-center gap-1 text-accent/70"><Bell size={12} /> {h.reminder_time?.slice(0, 5)}</span>
+                         <span className="flex items-center gap-1 text-accent/70"><Bell size={12} /> {formatTime12h(h.reminder_time)}</span>
                        )}
                     </div>
                   </div>

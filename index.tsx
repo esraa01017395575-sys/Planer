@@ -15,6 +15,7 @@ import { ProjectsPage } from './pages/ProjectsPage';
 import AuthPage from './pages/AuthPage';
 import OnboardingPage from './pages/OnboardingPage';
 import LandingPage from './pages/LandingPage';
+import { PomodoroPage } from './pages/PomodoroPage';
 import { AppShell } from './components/layout/AppShell';
 import './index.css';
 
@@ -156,6 +157,10 @@ const App = () => {
 
           <Route path="/settings">
             {!session ? <Redirect to="/auth" /> : <AppShell><Settings /></AppShell>}
+          </Route>
+
+          <Route path="/pomodoro/:taskId">
+            {params => !session ? <Redirect to="/auth" /> : <PomodoroPage params={params} />}
           </Route>
 
           <Route path="/">

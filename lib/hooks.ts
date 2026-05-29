@@ -258,8 +258,15 @@ export const useCreateHabit = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not found');
 
+      // Schema fix: map custom 'name' to official 'title' and delete 'name' to avoid PGRST204 column mismatch error
+      const cleanedData = { ...data };
+      if (cleanedData.name && !cleanedData.title) {
+        cleanedData.title = cleanedData.name;
+      }
+      delete cleanedData.name;
+
       const { error } = await supabase.from('habits').insert({
-        ...data,
+        ...cleanedData,
         user_id: user.id,
         created_at: new Date().toISOString()
       });
@@ -689,7 +696,14 @@ export const useUpdateHabit = () => {
   const updateHabit = async ({ id, data }: { id: string, data: any }, options?: { onSuccess?: () => void, onError?: (error: any) => void }) => {
     setIsPending(true);
     try {
-      const { error } = await supabase.from('habits').update(data).eq('id', id);
+      // Schema fix: map custom 'name' to official 'title' and delete 'name' to avoid PGRST204 column mismatch error
+      const cleanedData = { ...data };
+      if (cleanedData.name && !cleanedData.title) {
+        cleanedData.title = cleanedData.name;
+      }
+      delete cleanedData.name;
+
+      const { error } = await supabase.from('habits').update(cleanedData).eq('id', id);
       if (error) throw error;
       if (options?.onSuccess) options.onSuccess();
     } catch (err: any) {
@@ -1358,12 +1372,19 @@ export const useGetNotifications = () => {
     if (!user) return;
 
     const { data: notifications, error } = await supabase
-      .from('user_notifications')
+      .from('notifications')
       .select('*')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false });
 
-    if (!error) setData(notifications || []);
+    if (!error && notifications) {
+      // Map 'body' database field to 'message' for frontend rendering compatibility
+      const mapped = notifications.map((n: any) => ({
+        ...n,
+        message: n.message || n.body || ''
+      }));
+      setData(mapped);
+    }
     setLoading(false);
   };
 
@@ -1376,14 +1397,14 @@ export const useGetNotifications = () => {
 
 export const useMarkNotificationRead = () => {
   const markRead = async (id: string) => {
-    await supabase.from('user_notifications').update({ is_read: true }).eq('id', id);
+    await supabase.from('notifications').update({ is_read: true }).eq('id', id);
   };
   return { mutate: markRead };
 };
 
 export const useDeleteNotification = () => {
   const deleteNotif = async (id: string) => {
-    await supabase.from('user_notifications').delete().eq('id', id);
+    await supabase.from('notifications').delete().eq('id', id);
   };
   return { mutate: deleteNotif };
 };

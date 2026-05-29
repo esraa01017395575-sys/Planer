@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { supabase } from '../lib/supabase';
 
 type Theme = 'midnight' | 'aurora' | 'solar';
 type Mode = 'dark' | 'light';
@@ -20,6 +21,31 @@ interface AppContextType {
   t: (key: string) => string;
   addNotification: (message: string, type: 'success' | 'error' | 'info') => void;
   notifications: Notification[];
+
+  // Global Pomodoro
+  activePomodoro: any;
+  setActivePomodoro: (task: any) => void;
+  pomodoroTime: number;
+  setPomodoroTime: (time: number) => void;
+  initialPomodoroTime: number;
+  setInitialPomodoroTime: (time: number) => void;
+  isPomodoroRunning: boolean;
+  setIsPomodoroRunning: (running: boolean) => void;
+  pomodoroPhase: 'focus' | 'break' | 'long-break';
+  setPomodoroPhase: (phase: 'focus' | 'break' | 'long-break') => void;
+  pomodoroCount: number;
+  setPomodoroCount: (count: number) => void;
+  soundMuted: boolean;
+  setSoundMuted: (muted: boolean) => void;
+  isPomodoroMinimized: boolean;
+  setIsPomodoroMinimized: (minimized: boolean) => void;
+  startPomodoroGlobal: (task: any) => void;
+  taskRemindersEnabled: boolean;
+  setTaskRemindersEnabled: (enabled: boolean) => void;
+  habitRemindersEnabled: boolean;
+  setHabitRemindersEnabled: (enabled: boolean) => void;
+  aiSuggestionsEnabled: boolean;
+  setAiSuggestionsEnabled: (enabled: boolean) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -271,6 +297,186 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [language, setLanguage] = useState<Language>(() => (localStorage.getItem('language') as Language) || 'en');
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
+  // Notifications Preferences
+  const [taskRemindersEnabled, setTaskRemindersEnabled] = useState<boolean>(() => localStorage.getItem('taskRemindersEnabled') !== 'false');
+  const [habitRemindersEnabled, setHabitRemindersEnabled] = useState<boolean>(() => localStorage.getItem('habitRemindersEnabled') !== 'false');
+  const [aiSuggestionsEnabled, setAiSuggestionsEnabled] = useState<boolean>(() => localStorage.getItem('aiSuggestionsEnabled') !== 'false');
+
+  // Pomodoro Global State
+  const [activePomodoro, setActivePomodoro] = useState<any | null>(null);
+  const [pomodoroTime, setPomodoroTime] = useState(25 * 60);
+  const [initialPomodoroTime, setInitialPomodoroTime] = useState(25 * 60);
+  const [isPomodoroRunning, setIsPomodoroRunning] = useState(false);
+  const [pomodoroPhase, setPomodoroPhase] = useState<'focus' | 'break' | 'long-break'>('focus');
+  const [pomodoroCount, setPomodoroCount] = useState(0);
+  const [soundMuted, setSoundMuted] = useState<boolean>(() => localStorage.getItem('soundMuted') === 'true');
+  const [isPomodoroMinimized, setIsPomodoroMinimized] = useState(false);
+
+  // Audio Synthesizer Helpers for Retro ticking and chime
+  const playTickSound = () => {
+    if (soundMuted) return;
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(450, audioCtx.currentTime); // Crisper watch clock ticking frequency
+      gainNode.gain.setValueAtTime(0.025, audioCtx.currentTime); // Audible but highly comfortable click volume
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.03);
+      
+      osc.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.04);
+    } catch (e) {
+      // Audio context permission or fallback error ignored
+    }
+  };
+
+  const playBeepSound = () => {
+    if (soundMuted) return;
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const notes = [523.25, 659.25, 783.99]; // C5, E5, G5 triple chime
+      notes.forEach((freq, idx) => {
+        const osc = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime + idx * 0.12);
+        gainNode.gain.setValueAtTime(0.04, audioCtx.currentTime + idx * 0.12);
+        gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + idx * 0.12 + 0.3);
+        
+        osc.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        
+        osc.start(audioCtx.currentTime + idx * 0.12);
+        osc.stop(audioCtx.currentTime + idx * 0.12 + 0.35);
+      });
+    } catch (e) {
+      // Click restriction/permission error ignored
+    }
+  };
+
+  // Global handle Pomodoro Phase completion
+  const handleGlobalPomodoroEnd = async () => {
+    setIsPomodoroRunning(false);
+    playBeepSound();
+
+    if (pomodoroPhase === 'focus') {
+      const newCount = pomodoroCount + 1;
+      setPomodoroCount(newCount);
+
+      // Record Pomodoro Session inside DB (Support dual density compatibility query)
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user && activePomodoro) {
+          const durationMins = Math.round(initialPomodoroTime / 60);
+          await supabase.from('pomodoro_sessions').insert({
+            user_id: user.id,
+            task_id: activePomodoro.id,
+            duration_minutes: durationMins,
+            duration_min: durationMins, // dual-column density
+            completed: true,
+            completed_at: new Date().toISOString()
+          });
+        }
+      } catch (err) {
+        console.error("Error saving global pomodoro session:", err);
+      }
+
+      const isLongBreak = newCount % 4 === 0;
+      const breakMins = isLongBreak ? 15 : 5;
+      const nextPhaseState = isLongBreak ? 'long-break' : 'break';
+
+      setPomodoroPhase(nextPhaseState);
+      setPomodoroTime(breakMins * 60);
+      setInitialPomodoroTime(breakMins * 60);
+      addNotification(language === 'ar' ? `رائع تم إكمال جلسة التركيز! استراحة لمدة ${breakMins} دقائق 🌟` : `Fantastic job! Taking a ${breakMins} mins break 🌟`, 'success');
+
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification(language === 'ar' ? 'جلسة الـ Focus انتهت!' : 'Focus Session Finished!', {
+          body: language === 'ar' ? `حان وقت الاستراحة (${breakMins} دقائق)` : `Time for a well-deserved ${breakMins}m break!`,
+          icon: '/favicon.ico'
+        });
+      }
+    } else {
+      setPomodoroPhase('focus');
+      const focusSecs = (activePomodoro?.estimated_min || 25) * 60;
+      setPomodoroTime(focusSecs);
+      setInitialPomodoroTime(focusSecs);
+      addNotification(language === 'ar' ? 'انتهت الاستراحة! هيا لنركز مجدداً 💪' : 'Break is over! Clear your mind and let\'s focus 💪', 'info');
+
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification(language === 'ar' ? 'انتهت الاستراحة!' : 'Break Over!', {
+          body: language === 'ar' ? 'هل أنت مستعد لجلسة التركيز القادمة؟' : 'Ready to dive back into your focused session?',
+          icon: '/favicon.ico'
+        });
+      }
+    }
+  };
+
+  // Global ticker effect
+  useEffect(() => {
+    let interval: any;
+    if (isPomodoroRunning) {
+      interval = setInterval(() => {
+        setPomodoroTime(prev => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            setTimeout(() => {
+              handleGlobalPomodoroEnd();
+            }, 10);
+            return 0;
+          }
+          if (pomodoroPhase === 'focus') {
+            playTickSound();
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isPomodoroRunning, pomodoroPhase, soundMuted, activePomodoro]);
+
+  // Global Start Action
+  const startPomodoroGlobal = async (task: any) => {
+    try {
+      // 1. Instantly set task status to in_progress (or doing) in database
+      const { error } = await supabase
+        .from('tasks')
+        .update({ status: 'in_progress' })
+        .eq('id', task.id);
+      
+      if (error) {
+        // Fallback or backup name: 'doing' (some workspaces use 'doing' some use 'in_progress')
+        await supabase
+          .from('tasks')
+          .update({ status: 'doing' })
+          .eq('id', task.id);
+      }
+    } catch (e) {
+      console.error("Error setting task status:", e);
+    }
+
+    // 2. Set timer constants
+    const targetMins = task.estimated_min || task.duration || 25;
+    setActivePomodoro(task);
+    setInitialPomodoroTime(targetMins * 60);
+    setPomodoroTime(targetMins * 60);
+    setIsPomodoroRunning(true);
+    setPomodoroPhase('focus');
+    setIsPomodoroMinimized(false);
+
+    addNotification(language === 'ar' ? 'بدأت جلسة بومودورو! تم تحويل المهمة إلى قيد التنفيذ' : 'Pomodoro session started! Task moved to Active Focus', 'success');
+
+    // 3. Directly redirect to /pomodoro/taskid page
+    window.history.pushState(null, '', `/pomodoro/${task.id}`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  };
+
   const addNotification = (message: string, type: 'success' | 'error' | 'info') => {
     const id = Math.random().toString(36).substring(7);
     setNotifications(prev => [...prev, { id, message, type }]);
@@ -278,6 +484,177 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setNotifications(prev => prev.filter(n => n.id !== id));
     }, 5000);
   };
+
+  const parseTimeToHoursAndMinutes = (timeStr: string): { hours: number; minutes: number } | null => {
+    if (!timeStr) return null;
+    const str = String(timeStr).trim().toLowerCase();
+    
+    if (/am|pm/i.test(str)) {
+      const match = str.match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
+      if (match) {
+        let hh = parseInt(match[1], 10);
+        const mm = parseInt(match[2], 10);
+        const ampm = match[3];
+        if (ampm === 'pm' && hh < 12) hh += 12;
+        if (ampm === 'am' && hh === 12) hh = 0;
+        return { hours: hh, minutes: mm };
+      }
+    }
+    
+    const parts = str.split(':');
+    if (parts.length >= 2) {
+      const hh = parseInt(parts[0], 10);
+      const mm = parseInt(parts[1], 10);
+      if (!isNaN(hh) && !isNaN(mm)) {
+        return { hours: hh, minutes: mm };
+      }
+    }
+    return null;
+  };
+
+  const firedNotifications = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+
+    const checkReminders = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.user) return;
+        const userId = session.user.id;
+        const now = new Date();
+        const todayKey = now.toISOString().slice(0, 10);
+
+        // --- 1. TASK REMINDERS (30 MINUTES BEFORE TIME) ---
+        const taskReminders = localStorage.getItem('taskRemindersEnabled') !== 'false';
+        if (taskReminders) {
+          const { data: tasks, error: tasksError } = await supabase
+            .from('tasks')
+            .select('*')
+            .eq('user_id', userId)
+            .eq('due_date', todayKey)
+            .neq('status', 'completed')
+            .neq('status', 'done');
+
+          if (!tasksError && tasks) {
+            tasks.forEach((task: any) => {
+              if (!task.scheduled_time) return;
+              const parsedTime = parseTimeToHoursAndMinutes(task.scheduled_time);
+              if (!parsedTime) return;
+
+              const scheduledDateTime = new Date(now);
+              scheduledDateTime.setHours(parsedTime.hours, parsedTime.minutes, 0, 0);
+
+              const timeDiffMs = scheduledDateTime.getTime() - now.getTime();
+              // check if starting in around 30 mins (25 to 33 minutes)
+              const isAround30MinsBefore = timeDiffMs > 25 * 60_000 && timeDiffMs <= 33 * 60_000;
+
+              if (isAround30MinsBefore) {
+                const uniqueKey = `task-${task.id}-30m-reminded`;
+                if (!firedNotifications.current.has(uniqueKey)) {
+                  firedNotifications.current.add(uniqueKey);
+                  
+                  const msgAr = `المهمة "${task.title}" ستبدأ خلال 30 دقيقة! 🎯`;
+                  const msgEn = `Task "${task.title}" starts in 30 minutes! 🎯`;
+                  addNotification(language === 'ar' ? msgAr : msgEn, 'info');
+
+                  // Save notification to database notifications table
+                  supabase.from('notifications').insert({
+                    user_id: userId,
+                    type: 'task_reminder',
+                    title: task.title,
+                    body: language === 'ar' ? msgAr : msgEn,
+                    ref_id: task.id,
+                    is_read: false
+                  }).then(({ error }: any) => {
+                    if (error) console.error("Failed to insert task reminder to db:", error);
+                  });
+
+                  if (Notification.permission === 'granted') {
+                    new Notification(task.title, {
+                      body: language === 'ar' ? msgAr : msgEn,
+                      icon: '/favicon.ico'
+                    });
+                  }
+                }
+              }
+            });
+          }
+        }
+
+        // --- 2. HABIT REMINDERS (GLOBAL BACKGROUND SUPPORT) ---
+        const habitReminders = localStorage.getItem('habitRemindersEnabled') !== 'false';
+        if (habitReminders) {
+          const { data: habits, error: habitsError } = await supabase
+            .from('habits')
+            .select('*')
+            .eq('user_id', userId)
+            .eq('is_active', true);
+
+          if (!habitsError && habits) {
+            habits.forEach((h: any) => {
+              if (!h.reminder_time) return;
+              if (h.last_completed_on === todayKey) return;
+
+              const parsedTime = parseTimeToHoursAndMinutes(h.reminder_time);
+              if (!parsedTime) return;
+
+              const targetTime = new Date(now);
+              targetTime.setHours(parsedTime.hours, parsedTime.minutes, 0, 0);
+
+              const reminderOffsets = Array.isArray(h.reminders) && h.reminders.length > 0 ? h.reminders : [0];
+
+              reminderOffsets.forEach((mins: number) => {
+                const fireAt = new Date(targetTime.getTime() - mins * 60_000);
+                const uniqueKey = `habit-${h.id}:${todayKey}:${mins}`;
+
+                if (!firedNotifications.current.has(uniqueKey)) {
+                  const diff = now.getTime() - fireAt.getTime();
+                  if (diff >= 0 && diff < 120_000) {
+                    firedNotifications.current.add(uniqueKey);
+
+                    const bodyAr = mins === 0 ? "حان وقت هذه العادة الآن! 🌟" : `تبدأ هذه العادة خلال ${mins} دقيقة! ⏰`;
+                    const bodyEn = mins === 0 ? `Time for habit "${h.title}" now! 🌟` : `Habit "${h.title}" starts in ${mins} minutes! ⏰`;
+
+                    addNotification(`${h.title} — ${language === 'ar' ? bodyAr : bodyEn}`, 'info');
+
+                    // Save notification to database notifications table
+                    supabase.from('notifications').insert({
+                      user_id: userId,
+                      type: 'habit_reminder',
+                      title: h.title,
+                      body: language === 'ar' ? bodyAr : bodyEn,
+                      ref_id: h.id,
+                      is_read: false
+                    }).then(({ error }: any) => {
+                      if (error) console.error("Failed to insert habit reminder to db:", error);
+                    });
+
+                    if (Notification.permission === 'granted') {
+                      new Notification(h.title, {
+                        body: language === 'ar' ? bodyAr : bodyEn,
+                        tag: uniqueKey
+                      });
+                    }
+                  }
+                }
+              });
+            });
+          }
+        }
+
+      } catch (err) {
+        console.error("Error in global reminders checker:", err);
+      }
+    };
+
+    checkReminders();
+    const intervalId = setInterval(checkReminders, 45_000);
+    return () => clearInterval(intervalId);
+  }, [language]);
 
   useEffect(() => {
     localStorage.setItem('theme', theme);
@@ -303,10 +680,42 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const t = (key: string) => translations[language][key] || key;
 
+  const handleSetTaskReminders = (enabled: boolean) => {
+    setTaskRemindersEnabled(enabled);
+    localStorage.setItem('taskRemindersEnabled', String(enabled));
+  };
+
+  const handleSetHabitReminders = (enabled: boolean) => {
+    setHabitRemindersEnabled(enabled);
+    localStorage.setItem('habitRemindersEnabled', String(enabled));
+  };
+
+  const handleSetAiSuggestions = (enabled: boolean) => {
+    setAiSuggestionsEnabled(enabled);
+    localStorage.setItem('aiSuggestionsEnabled', String(enabled));
+  };
+
+  const handleSetSoundMuted = (muted: boolean) => {
+    setSoundMuted(muted);
+    localStorage.setItem('soundMuted', String(muted));
+  };
+
   return (
     <AppContext.Provider value={{ 
       theme, setTheme, mode, toggleMode, language, setLanguage, t, 
-      addNotification, notifications 
+      addNotification, notifications,
+      activePomodoro, setActivePomodoro,
+      pomodoroTime, setPomodoroTime,
+      initialPomodoroTime, setInitialPomodoroTime,
+      isPomodoroRunning, setIsPomodoroRunning,
+      pomodoroPhase, setPomodoroPhase,
+      pomodoroCount, setPomodoroCount,
+      soundMuted, setSoundMuted: handleSetSoundMuted,
+      isPomodoroMinimized, setIsPomodoroMinimized,
+      startPomodoroGlobal,
+      taskRemindersEnabled, setTaskRemindersEnabled: handleSetTaskReminders,
+      habitRemindersEnabled, setHabitRemindersEnabled: handleSetHabitReminders,
+      aiSuggestionsEnabled, setAiSuggestionsEnabled: handleSetAiSuggestions
     }}>
       {children}
       

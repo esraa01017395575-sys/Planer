@@ -3,19 +3,52 @@ import { useAppContext } from '../context/AppContext';
 import { motion } from 'framer-motion';
 import { 
   Moon, Sun, Monitor, Bell, Globe, 
-  Palette, User, Shield, LogOut, ChevronRight 
+  Palette, User, Shield, LogOut, ChevronRight, Volume2
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useLocation } from 'wouter';
 
 export const Settings = () => {
-  const { t, language, setLanguage, theme, setTheme, mode, toggleMode } = useAppContext();
+  const { 
+    t, language, setLanguage, theme, setTheme, mode, toggleMode,
+    taskRemindersEnabled, setTaskRemindersEnabled,
+    habitRemindersEnabled, setHabitRemindersEnabled,
+    aiSuggestionsEnabled, setAiSuggestionsEnabled,
+    soundMuted, setSoundMuted
+  } = useAppContext();
   const [, setLocation] = useLocation();
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setLocation('/');
   };
+
+  const notificationOptions = [
+    { 
+      key: 'task', 
+      label: language === 'ar' ? 'تذكير المهام (30 دقيقة قبلها)' : 'Task Reminders (30m before)', 
+      value: taskRemindersEnabled, 
+      setValue: setTaskRemindersEnabled 
+    },
+    { 
+      key: 'habit', 
+      label: language === 'ar' ? 'تذكير العادات' : 'Habit Reminders', 
+      value: habitRemindersEnabled, 
+      setValue: setHabitRemindersEnabled 
+    },
+    { 
+      key: 'ai', 
+      label: language === 'ar' ? 'اقتراحات الذكاء الاصطناعي' : 'AI Suggestions', 
+      value: aiSuggestionsEnabled, 
+      setValue: setAiSuggestionsEnabled 
+    },
+    { 
+      key: 'sound', 
+      label: language === 'ar' ? 'تفعيل أصوات التنبيهات ونقرات الساعة' : 'Enable alert sounds and ticking chimes', 
+      value: !soundMuted, 
+      setValue: (val: boolean) => setSoundMuted(!val) 
+    }
+  ];
 
   const themes = [
     { id: 'midnight', name: 'Midnight Purple', color: '#7C5CFC' },
@@ -98,15 +131,22 @@ export const Settings = () => {
 
           <section className="glass-card p-8 space-y-6">
             <h2 className="text-xl font-bold flex items-center gap-2 border-b border-border/30 pb-4 text-text-primary">
-              <Bell size={20} className="text-accent" /> Notifications
+              <Bell size={20} className="text-accent" /> {language === 'ar' ? 'التنبيهات' : 'Notifications'}
             </h2>
             
             <div className="space-y-4">
-              {['Task Reminders', 'Habit Reminders', 'AI Suggestions'].map(notif => (
-                <div key={notif} className="flex items-center justify-between group">
-                  <span className="font-bold text-sm text-text-primary group-hover:text-accent transition-colors">{notif}</span>
-                  <button className="w-12 h-6 rounded-full bg-accent relative transition-all shadow-inner">
-                    <span className="absolute right-1 top-1 bg-white w-4 h-4 rounded-full shadow-sm" />
+              {notificationOptions.map(notif => (
+                <div key={notif.key} className="flex items-center justify-between group">
+                  <span className="font-bold text-sm text-text-primary group-hover:text-accent transition-colors">
+                    {notif.label}
+                  </span>
+                  <button 
+                    onClick={() => notif.setValue(!notif.value)}
+                    className={`w-12 h-6 rounded-full p-1 transition-colors duration-200 ease-in-out ${
+                      notif.value ? 'bg-accent' : 'bg-bg-primary border border-border/20'
+                    } flex items-center ${notif.value ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <span className="bg-white w-4 h-4 rounded-full shadow-sm transition-all duration-200" />
                   </button>
                 </div>
               ))}

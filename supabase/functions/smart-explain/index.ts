@@ -46,7 +46,7 @@ Output in beautiful, clean markdown, but keep it concise and direct (max 120 wor
 اسم المهمة: "${taskTitle}"
 ${context ? `السياق الحالي ليومه: ${context}` : ""}`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${geminiApiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`;
     
     const response = await fetch(url, {
       method: "POST",

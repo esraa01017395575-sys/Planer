@@ -63,7 +63,7 @@ import { MiniFloatingPomodoro } from "../components/MiniFloatingPomodoro";
 const DroppableAny = Droppable as any;
 
 export const Tasks = ({ currentUser }: any) => {
-  const { t, language, addNotification } = useAppContext();
+  const { t, language, addNotification, startPomodoroGlobal } = useAppContext();
   const { data: tasksData, loading: isLoading, refetch } = useGetTasks();
   const { mutate: updateTask } = useUpdateTask();
   const { mutate: completeTask } = useCompleteTask();
@@ -530,15 +530,7 @@ export const Tasks = ({ currentUser }: any) => {
                             }}
                             onStatusChange={handleStatusChange}
                             onStartPomodoro={(t) => {
-                              if (t.status === "todo") {
-                                handleStatusChange(t.id, "in_progress");
-                              }
-                              setPomodoroTime(t.estimated_min ? t.estimated_min * 60 : 25 * 60);
-                              setInitialPomodoroTime(t.estimated_min ? t.estimated_min * 60 : 25 * 60);
-                              setActivePomodoro(t);
-                              setPomodoroStartTask(t);
-                              setIsFullScreenPomodoroOpen(true);
-                              setIsPomodoroRunning(true);
+                              startPomodoroGlobal(t);
                             }}
                             onDeleted={(id) => {
                               setTasks((prev) => prev.filter((tk) => tk.id !== id));

@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   LayoutDashboard, MessageSquare, FolderGit2, Target, CheckSquare, 
   Activity, StickyNote, Settings, Heart, Calendar, 
-  Bell, Sun, Moon, Search, Plus, User, LogOut, Check, Trash2, Clock
+  Bell, Sun, Moon, Search, Plus, User, LogOut, Check, Trash2, Clock,
+  Volume2, VolumeX, Maximize2, GripHorizontal, Play, Pause
 } from 'lucide-react';
 import { useAppContext } from '../../context/AppContext';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -251,8 +252,107 @@ const Topbar = () => {
   );
 };
 
+const PersistentFloatingPomodoro = () => {
+  const [location, setLocation] = useLocation();
+  const { 
+    language,
+    activePomodoro, setActivePomodoro,
+    pomodoroTime, setPomodoroTime,
+    isPomodoroRunning, setIsPomodoroRunning,
+    pomodoroPhase, setPomodoroPhase,
+    soundMuted, setSoundMuted,
+    setInitialPomodoroTime
+  } = useAppContext();
+
+  if (!activePomodoro) return null;
+
+  const minutes = String(Math.floor(pomodoroTime / 60)).padStart(2, '0');
+  const seconds = String(pomodoroTime % 60).padStart(2, '0');
+
+  const handleCancel = () => {
+    if (confirm(language === 'ar' ? 'هل تريد إلغاء وإغلاق جلسة البومودورو الحالية؟' : 'Do you want to discard the active Pomodoro session?')) {
+      setIsPomodoroRunning(false);
+      setActivePomodoro(null);
+    }
+  };
+
+  return (
+    <motion.div
+      drag
+      dragMomentum={false}
+      dragElastic={0.05}
+      initial={{ opacity: 0, y: 50, scale: 0.9 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.9 }}
+      className="fixed bottom-6 right-6 z-[99999] cursor-grab active:cursor-grabbing w-64 shadow-xl rounded-xl p-3 border border-accent/20 bg-bg-card/95 backdrop-blur-xl select-none"
+    >
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between pb-1 border-b border-border/10">
+          <div className="flex items-center gap-1 text-[9px] uppercase font-bold text-text-secondary tracking-widest leading-none">
+            <GripHorizontal className="w-3 h-3 opacity-40 animate-pulse" />
+            <span className={pomodoroPhase === 'focus' ? 'text-accent' : 'text-emerald-500'}>
+              {pomodoroPhase === 'focus' ? (language === 'ar' ? 'تركيز 🍅' : 'Focus 🍅') : (language === 'ar' ? 'استراحة ☕' : 'Break ☕')}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-0.5">
+            <button 
+              onClick={() => setSoundMuted(!soundMuted)} 
+              className="p-1 hover:bg-accent/10 rounded-lg text-text-secondary hover:text-accent transition-colors"
+              title={soundMuted ? 'Unmute' : 'Mute'}
+            >
+              {soundMuted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3.5 h-3.5" />}
+            </button>
+            <button 
+              onClick={() => setLocation(`/pomodoro/${activePomodoro.id}`)} 
+              className="p-1 hover:bg-accent/10 rounded-lg text-text-secondary hover:text-accent transition-colors"
+              title="Expand Detail"
+            >
+              <Maximize2 className="w-3 h-3" />
+            </button>
+            <button 
+              onClick={handleCancel} 
+              className="p-1 hover:bg-red-500/10 rounded-lg text-text-secondary hover:text-red-500 transition-colors"
+              title="Close"
+            >
+              <Trash2 className="w-3 object-contain h-3" />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 py-0.5">
+          <div className="flex-1 min-w-0">
+            <p className="text-[8px] text-text-secondary font-black opacity-60 uppercase mb-0.5 tracking-wider">
+              {language === 'ar' ? 'المهمة الجارية' : 'ACTIVE FOCUS'}
+            </p>
+            <h4 className="text-[11px] font-bold text-text-primary leading-tight truncate">
+              {activePomodoro.title}
+            </h4>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <div className="font-mono text-base font-bold text-text-primary tabular-nums">
+              {minutes}:{seconds}
+            </div>
+
+            <button
+              onClick={() => setIsPomodoroRunning(!isPomodoroRunning)}
+              className="w-7 h-7 flex items-center justify-center rounded-full bg-accent hover:bg-accent-glow text-white shadow-lg shadow-accent/25 transition-all active:scale-95"
+            >
+              {isPomodoroRunning ? <Pause className="w-3 h-3 fill-current" /> : <Play className="w-3 h-3 fill-current ml-0.5" />}
+            </button>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
 export const AppShell = ({ children, hideNav = false, hideTopbar = false }: { children: React.ReactNode, hideNav?: boolean, hideTopbar?: boolean }) => {
-  const { language } = useAppContext();
+  const { language, activePomodoro } = useAppContext();
+  const [location] = useLocation();
+
+  const showFloating = activePomodoro && !location.startsWith('/pomodoro');
   
   if (hideNav) {
     return (
@@ -262,6 +362,7 @@ export const AppShell = ({ children, hideNav = false, hideTopbar = false }: { ch
             {children}
           </div>
         </main>
+        {showFloating && <PersistentFloatingPomodoro />}
       </div>
     );
   }
@@ -275,6 +376,8 @@ export const AppShell = ({ children, hideNav = false, hideTopbar = false }: { ch
           {children}
         </div>
       </main>
+
+      {showFloating && <PersistentFloatingPomodoro />}
     </div>
   );
 };

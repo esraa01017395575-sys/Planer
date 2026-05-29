@@ -23,6 +23,34 @@ I can access your current tasks and habits to provide personalized advice. How c
 const INITIAL_AI_MESSAGE_AR = `مرحباً! أنا مدربك الذكي (AI Coach). أنا هنا لأساعدك في بناء عادات صحية، تخطيط يومك بشكل صحيح، وتحقيق أهدافك.
 يمكنني الوصول إلى مهامك وعاداتك الحالية لأقدم لك نصائح مخصصة. كيف يمكنني مساعدتك اليوم في تنظيم حياتك؟`;
 
+const Typewriter = ({ text, speed = 10 }: { text: string; speed?: number }) => {
+  const [displayedText, setDisplayedText] = useState("");
+  const textRef = useRef(text);
+  
+  useEffect(() => {
+    textRef.current = text;
+    let index = 0;
+    setDisplayedText("");
+    
+    const interval = setInterval(() => {
+      setDisplayedText((prev) => {
+        const full = textRef.current;
+        if (index >= full.length) {
+          clearInterval(interval);
+          return full;
+        }
+        const nextChar = full[index];
+        index++;
+        return prev + (nextChar !== undefined ? nextChar : "");
+      });
+    }, speed);
+    
+    return () => clearInterval(interval);
+  }, [text, speed]);
+  
+  return <span>{displayedText}</span>;
+};
+
 type Message = { role: 'user' | 'model', content: string, created_at?: string, timestamp?: Date, file?: File | null };
 
 export const Chat = () => {
@@ -65,33 +93,36 @@ export const Chat = () => {
   const { mutate: createHabit } = useCreateHabit();
 
   const getSystemInstruction = () => `
-You are AI Coach Pro, a high-performance life coach and productivity expert.
-Your goal is to help the user achieve their best self through actionable advice, task organization, and habit tracking.
+You are an AI Life OS Coach for the user.
+Role:
+You are a highly strategic, professional, and deeply empathetic Life Coach and professional development consultant. You specialize in career roadmap analysis, daily habit engineering, long-term strategic planning (up to 1 year), and productivity optimization. Your goal is not to just "distribute tasks" or dump JSON onto the user's dashboard, but to truly understand their lifestyle, psychological status, energy flow, and help them engineer lasting transformations.
 
-Style: Warm, honest, witty, encouraging, and direct. Do not be overly flattering.
-Language: ALWAYS respond in ${language === 'en' ? 'English' : 'Arabic'}. 
-If in Arabic mode: ALWAYS respond in warm, witty, clever colloquial Egyptian Arabic (اللهجة المصرية العامية المحببة والذكية والكوميدية أحياناً والمشجعة جداً). NEVER use standard classical Arabic (الفصحى). Use words like 'يا بطل', 'عاش يا وحش', 'جامد جداً', 'ولا تشيل هم', 'تمام كدا يا صاحبي', 'يلا بينا'. Keep responses highly organic and friendly.
+Style & Language:
+- ALWAYS respond in ${language === 'en' ? 'English' : 'Arabic'}.
+- Act as a wise, incredibly warm, and witty Egyptian Life Coach (المدرب الذكي واللايف كوتش الشخصي).
+- Speak in the absolute best, most encouraging, clever, and engaging colloquial Egyptian dialect (العامية المصرية المحببة والذكية جدًا). Use phrases like 'يا بطل', 'عاش يا وحش', 'جامد جداً', 'ولا تشيل هم', 'خطوة خطوة وهنوصل يا صاحبي', 'يا بطلة'.
 
-Context Awareness:
-You have access to the user's current tasks, habits, and schedule. Use this data to provide personalized advice.
-If the user asks to organize their day, suggest specific times based on their current schedule.
-If a task is too big, suggest breaking it down into subtasks.
+Core Coaching Philosophy & Behavior:
+- Diagnose Before You Prescribe (التشخيص والاستفسار أولاً):
+  - Do not rush to suggest tasks or habits instantly.
+  - Ask clear, reflective questions about the user's current routine, focus levels, daily obstacles, and energy level. Check their context, listen attentively, and ask ONLY one powerful question at a time to stay focused and not overwhelm them.
+  
+- Task vs. Habit Distinction (التفرقة الذكية بين المهمة والعادة):
+  - Actively study and guide the user in classifying habits vs tasks:
+    * Habit (عادة): A block of recurring action meant to build consistent automated behavior (e.g., drinking water, studying, sleeping early, reading). Suggest habits when they need consistency.
+    * Task (تاسك/مهمة): A finite, one-time specific piece of work with an end state (e.g., submitting an application, buying a tool, fixing a bug).
+  - When the user wants automated consistency, offer Habits. If they have a discrete accomplishment, offer Tasks.
+  
+- Long-Term Planning up to 1 Year (التخطيط الاستراتيجي طويل المدى حتى سنة كاملة):
+  - You can draft comprehensive roadmaps for periods up to 1 year (خطط ربع سنوية، نصف سنوية، وسنوية).
+  - Break long ranges into Annual Vision, Quarterly Milestones, Monthly sprints, and daily Tasks/Habits. Walk them step-by-step through the journey.
+
+CRITICAL RULES (PREVENT DUPLICATION):
+- You MUST study and cross-reference the user's active tasks and habits list in the provided context BEFORE creating any suggestions.
+- DO NOT suggest or propose any tasks (with similar names) or habits that already exist in the user's list. Focus ONLY on proposing totally new, fresh, distinct steps or routines, or asking them to modify/upgrade existing ones without creating duplicate records.
 
 EDGE FUNCTIONS & AI TOOLS:
-You have access to critical tools to execute database operations on the user's life OS in real-time. Call these tools immediately whenever the user asks for these actions:
-- create_task: Add a task (e.g., when they want to plan a task).
-- update_task_status: Change status of an existing task (e.g., when they completed a task or moved to in-progress).
-- create_habit: Create a habit to track.
-- log_habit_completion: Log habit completed.
-- create_goal: Create a long-term goal.
-
-If you invoke a tool, explain the success of the tool in colloquial Egyptian Arabic directly inside the final chat response. Do not explain technical detail, just say that you did it happily, e.g. "تمام يا بطل أضفتلك المهمة بنجاح!"
-
-Functionality:
-- Suggest Pomodoro sessions (25/5 or 50/10).
-- Suggest task breakdowns.
-- Warn about schedule conflicts.
-- Analyze images if provided.
+- create_task, update_task_status, create_habit, log_habit_completion, create_goal. Include confirmation cards only when appropriate.
 `;
 
   // Chat Sessions Hooks
@@ -178,15 +209,8 @@ Functionality:
         lastLoadedSessionIdRef.current = currentSessionId;
       }
 
-      // Trigger dynamic welcome message if this session has 0 messages and has not been triggered yet
-      if (sessionMessages.length === 0 && !isLoading && !triggeredWelcomeSessions.has(currentSessionId)) {
-        setTriggeredWelcomeSessions(prev => {
-          const updated = new Set(prev);
-          updated.add(currentSessionId);
-          return updated;
-        });
-        triggerDynamicWelcome(currentSessionId);
-      }
+      // No longer trigger dynamic welcome message automatically when entering white/empty chat
+      // This allows the user to immediately type without being forced to wait for a welcome message.
     }
   }, [sessionMessages, currentSessionId, isLoading, triggeredWelcomeSessions]);
 
@@ -425,6 +449,19 @@ Functionality:
   };
 
   const handleAcceptTask = (task: any, suggestionIdx: number, messageIdx: number) => {
+    // Prevent duplicated tasks with case-insensitive title checks
+    const trimmedTitle = String(task.title || "").trim().toLowerCase();
+    const isDuplicate = tasks?.some((t: any) => t.title?.trim().toLowerCase() === trimmedTitle && t.status !== 'completed' && t.status !== 'done');
+    if (isDuplicate) {
+      addNotification(
+        language === 'ar' 
+          ? `المهمة "${task.title}" موجودة بالفعل في قائمتك! 🎯` 
+          : `Task "${task.title}" is already in your list! 🎯`, 
+        'info'
+      );
+      return;
+    }
+
     const todayStr = format(new Date(), 'yyyy-MM-dd');
     let taskDueDate = task.due_date;
     if (
@@ -461,9 +498,23 @@ Functionality:
   };
 
   const handleAcceptHabit = (habit: any, suggestionIdx: number, messageIdx: number) => {
+    // Prevent duplicated habits with case-insensitive checks
+    const habitName = habit.name || habit.title || "";
+    const trimmedName = String(habitName).trim().toLowerCase();
+    const isDuplicate = habits?.some((h: any) => (h.title || h.name || "").trim().toLowerCase() === trimmedName);
+    if (isDuplicate) {
+      addNotification(
+        language === 'ar' 
+          ? `العادة "${habitName}" مسجلة بالفعل في نظامك! 🌟` 
+          : `Habit "${habitName}" is already registered! 🌟`, 
+        'info'
+      );
+      return;
+    }
+
     createHabit({
       data: {
-        name: habit.name || habit.title,
+        name: habitName,
         category: habit.category || 'health',
         frequency: habit.frequency || 'daily',
         target_per_day: habit.target_per_day || 1,
@@ -561,7 +612,11 @@ Functionality:
                       </div>
                     )}
                     <div className="text-[15px] lg:text-[17px] leading-relaxed whitespace-pre-wrap font-medium">
-                      {cleanContent}
+                      {msg.role === 'model' && idx === messages.length - 1 && !isLoading ? (
+                        <Typewriter text={cleanContent} />
+                      ) : (
+                        cleanContent
+                      )}
                     </div>
                   </div>
 
@@ -569,7 +624,8 @@ Functionality:
                     <div className="grid grid-cols-1 gap-3 ml-4">
                       {/* Task Suggestions */}
                       {suggestions.tasks && suggestions.tasks.map((task: any, sIdx: number) => {
-                        const isAccepted = acceptedTaskIds.has(`${idx}-${sIdx}`);
+                        const isAlreadyRegisteredTask = tasks?.some((t: any) => t.title?.trim().toLowerCase() === String(task.title || "").trim().toLowerCase() && t.status !== 'completed' && t.status !== 'done');
+                        const isAccepted = acceptedTaskIds.has(`${idx}-${sIdx}`) || isAlreadyRegisteredTask;
                         return (
                           <motion.div 
                             key={`task-${sIdx}`}
@@ -636,7 +692,9 @@ Functionality:
 
                       {/* Habit Suggestions */}
                       {suggestions.habits && suggestions.habits.map((habit: any, sIdx: number) => {
-                        const isAccepted = acceptedHabitIds.has(`${idx}-${sIdx}`);
+                        const targetName = habit.name || habit.title || "";
+                        const isAlreadyRegisteredHabit = habits?.some((h: any) => (h.title || "").trim().toLowerCase() === String(targetName).trim().toLowerCase() || (h.name || "").trim().toLowerCase() === String(targetName).trim().toLowerCase());
+                        const isAccepted = acceptedHabitIds.has(`${idx}-${sIdx}`) || isAlreadyRegisteredHabit;
                         return (
                           <motion.div 
                             key={`habit-${sIdx}`}
