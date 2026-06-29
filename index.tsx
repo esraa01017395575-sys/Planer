@@ -12,9 +12,12 @@ import { Settings } from './pages/Settings';
 import { Plans } from './pages/Plans';
 import { Favorites } from './pages/Favorites';
 import { ProjectsPage } from './pages/ProjectsPage';
+import { ProfilePage } from './pages/ProfilePage';
 import AuthPage from './pages/AuthPage';
 import OnboardingPage from './pages/OnboardingPage';
 import LandingPage from './pages/LandingPage';
+import { TermsPage } from './pages/TermsPage';
+import { PrivacyPage } from './pages/PrivacyPage';
 import { PomodoroPage } from './pages/PomodoroPage';
 import { AppShell } from './components/layout/AppShell';
 import './index.css';
@@ -159,8 +162,20 @@ const App = () => {
             {!session ? <Redirect to="/auth" /> : <AppShell><Settings /></AppShell>}
           </Route>
 
+          <Route path="/myprofile">
+            {!session ? <Redirect to="/auth" /> : <AppShell><ProfilePage /></AppShell>}
+          </Route>
+
           <Route path="/pomodoro/:taskId">
             {params => !session ? <Redirect to="/auth" /> : <PomodoroPage params={params} />}
+          </Route>
+
+          <Route path="/terms">
+            <TermsPage />
+          </Route>
+
+          <Route path="/privacy">
+            <PrivacyPage />
           </Route>
 
           <Route path="/">

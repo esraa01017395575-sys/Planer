@@ -8,7 +8,7 @@ import {
 import { useAppContext } from '../../context/AppContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useLocation } from 'wouter';
-import { useGetNotifications, useMarkNotificationRead, useDeleteNotification } from '../../lib/hooks';
+import { useGetNotifications, useMarkNotificationRead, useDeleteNotification, useGetProfile } from '../../lib/hooks';
 
 const Sidebar = () => {
   const { t, language } = useAppContext();
@@ -27,12 +27,12 @@ const Sidebar = () => {
 
   return (
     <motion.div 
-      className={`fixed top-4 bottom-4 ${language === 'ar' ? 'right-4' : 'left-4'} glass-card z-50 flex flex-col transition-all duration-300 overflow-hidden border-none shadow-xl`}
+      className={`hidden md:flex fixed top-4 bottom-4 ${language === 'ar' ? 'right-4' : 'left-4'} glass-card z-50 flex-col transition-all duration-300 overflow-hidden border-none shadow-xl`}
       animate={{ width: isHovered ? 260 : 72 }}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      <div className="p-4 flex items-center gap-3 mb-6">
+      <div className="p-3 pb-2 flex items-center gap-3 mb-2">
         <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-accent to-indigo-500 flex items-center justify-center shadow-lg shadow-accent/20 flex-shrink-0">
           <span className="text-white font-bold text-xl">A</span>
         </div>
@@ -50,13 +50,13 @@ const Sidebar = () => {
         </AnimatePresence>
       </div>
 
-      <div className="flex-1 px-3 space-y-1">
+      <div className="flex-1 px-3 space-y-0.5">
         {navItems.map((item) => (
           <Link key={item.id} href={item.path}>
             <div
-              className={`flex items-center gap-4 px-3 py-3 rounded-xl transition-all cursor-pointer group ${location === item.path ? 'bg-accent text-white shadow-lg shadow-accent/20' : 'text-text-secondary hover:bg-accent/10 hover:text-accent'}`}
+              className={`flex items-center gap-4 px-3 py-2 rounded-xl transition-all cursor-pointer group ${location === item.path ? 'bg-accent text-white shadow-lg shadow-accent/20' : 'text-text-secondary hover:bg-accent/10 hover:text-accent'}`}
             >
-              <item.icon className={`w-6 h-6 flex-shrink-0 ${location === item.path ? 'text-white' : 'group-hover:scale-110 transition-transform'}`} />
+              <item.icon className={`w-5.5 h-5.5 flex-shrink-0 ${location === item.path ? 'text-white' : 'group-hover:scale-110 transition-transform'}`} />
               <AnimatePresence>
                 {isHovered && (
                   <motion.span 
@@ -74,12 +74,12 @@ const Sidebar = () => {
         ))}
       </div>
 
-      <div className="p-3 space-y-1 border-t border-border/10">
+      <div className="p-3 py-2 space-y-0.5 border-t border-border/10">
         <Link href="/favorites">
           <div
-            className={`flex items-center gap-4 px-3 py-3 rounded-xl transition-all cursor-pointer group ${location === '/favorites' ? 'bg-accent text-white shadow-lg shadow-accent/20' : 'text-text-secondary hover:bg-accent/10 hover:text-accent'}`}
+            className={`flex items-center gap-4 px-3 py-2 rounded-xl transition-all cursor-pointer group ${location === '/favorites' ? 'bg-accent text-white shadow-lg shadow-accent/20' : 'text-text-secondary hover:bg-accent/10 hover:text-accent'}`}
           >
-            <Heart className={`w-6 h-6 flex-shrink-0 ${location === '/favorites' ? 'text-white' : 'group-hover:scale-110 transition-transform'}`} />
+            <Heart className={`w-5.5 h-5.5 flex-shrink-0 ${location === '/favorites' ? 'text-white' : 'group-hover:scale-110 transition-transform'}`} />
             <AnimatePresence>
               {isHovered && (
                 <motion.span 
@@ -97,9 +97,9 @@ const Sidebar = () => {
         
         <Link href="/settings">
           <div
-            className={`flex items-center gap-4 px-3 py-3 rounded-xl transition-all cursor-pointer group ${location === '/settings' ? 'bg-accent text-white shadow-lg shadow-accent/20' : 'text-text-secondary hover:bg-accent/10 hover:text-accent'}`}
+            className={`flex items-center gap-4 px-3 py-2 rounded-xl transition-all cursor-pointer group ${location === '/settings' ? 'bg-accent text-white shadow-lg shadow-accent/20' : 'text-text-secondary hover:bg-accent/10 hover:text-accent'}`}
           >
-            <Settings className={`w-6 h-6 flex-shrink-0 ${location === '/settings' ? 'text-white' : 'group-hover:scale-110 transition-transform'}`} />
+            <Settings className={`w-5.5 h-5.5 flex-shrink-0 ${location === '/settings' ? 'text-white' : 'group-hover:scale-110 transition-transform'}`} />
             <AnimatePresence>
               {isHovered && (
                 <motion.span 
@@ -119,11 +119,20 @@ const Sidebar = () => {
   );
 };
 
-const Topbar = () => {
+const Topbar = ({ 
+  mobileMenuOpen, 
+  onToggleMobileMenu,
+  showTopbar = true
+}: { 
+  mobileMenuOpen: boolean; 
+  onToggleMobileMenu: () => void;
+  showTopbar?: boolean;
+}) => {
   const { t, language, mode, toggleMode } = useAppContext();
   const { data: notifications, refetch } = useGetNotifications();
   const { mutate: markRead } = useMarkNotificationRead();
   const { mutate: deleteNotif } = useDeleteNotification();
+  const { data: profile } = useGetProfile();
   const [showNotifications, setShowNotifications] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -157,28 +166,47 @@ const Topbar = () => {
   };
 
   return (
-    <div className={`fixed top-4 ${language === 'ar' ? 'right-24 left-4' : 'left-24 right-4'} h-16 glass-card z-40 flex items-center justify-between px-6 border-none shadow-lg`}>
-      <div className="flex items-center gap-4 flex-1">
-        {/* Search removed */}
-      </div>
+    <div className={`fixed transition-all duration-300 ${showTopbar ? 'top-4' : '-top-20 opacity-0 pointer-events-none'} ${language === 'ar' ? 'right-4 md:right-24 left-4' : 'left-4 md:left-24 right-4'} h-16 glass-card z-40 flex items-center justify-between px-4 md:px-6 border-none shadow-lg`}>
+      <button 
+        onClick={onToggleMobileMenu}
+        className="flex items-center gap-2 cursor-pointer active:scale-95 transition-transform text-left outline-none"
+      >
+        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-indigo-500 flex items-center justify-center md:hidden shadow-lg shadow-accent/20 flex-shrink-0">
+          <span className="text-white font-bold text-sm">A</span>
+        </div>
+        <span className="font-display font-bold text-sm block md:hidden whitespace-nowrap">
+          AI Coach
+        </span>
+        <span className="text-[9px] text-accent font-black px-1.5 py-0.5 rounded bg-accent/10 md:hidden scale-[0.8] border border-accent/15 whitespace-nowrap">
+          {mobileMenuOpen ? '▲' : '▼'}
+        </span>
+      </button>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1 md:gap-2">
         <button 
           onClick={toggleMode}
-          className="p-2.5 text-text-secondary hover:text-accent hover:bg-accent/10 rounded-xl transition-all"
+          className="p-2 text-text-secondary hover:text-accent hover:bg-accent/10 rounded-xl transition-all"
           title={mode === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
         >
-          {mode === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+          {mode === 'dark' ? <Sun className="w-4.5 h-4.5" /> : <Moon className="w-4.5 h-4.5" />}
         </button>
         
         <div className="relative" ref={dropdownRef}>
           <button 
-            onClick={() => setShowNotifications(!showNotifications)}
-            className="p-2.5 text-text-secondary hover:text-accent hover:bg-accent/10 rounded-xl transition-all relative"
+            onClick={() => {
+              const nextVal = !showNotifications;
+              setShowNotifications(nextVal);
+              if (nextVal && unreadCount > 0) {
+                handleMarkAllRead();
+              }
+            }}
+            className="p-2 text-text-secondary hover:text-accent hover:bg-accent/10 rounded-xl transition-all relative"
           >
-            <Bell className="w-5 h-5" />
+            <Bell className="w-4.5 h-4.5" />
             {unreadCount > 0 && (
-              <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-bg-card" />
+              <span className="absolute top-1 right-1 min-w-[14px] h-[14px] bg-red-500 text-white text-[8px] font-bold flex items-center justify-center rounded-full px-0.5 border border-bg-primary shadow-sm tabular-nums animate-pulse">
+                {unreadCount}
+              </span>
             )}
           </button>
 
@@ -188,7 +216,7 @@ const Topbar = () => {
                 initial={{ opacity: 0, y: 10, scale: 0.95 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                className={`absolute top-full mt-2 ${language === 'ar' ? 'left-0' : 'right-0'} w-80 glass-card bg-bg-card shadow-2xl border border-border p-4 z-50`}
+                className={`absolute top-full mt-2 ${language === 'ar' ? 'left-0' : 'right-0'} w-72 md:w-80 glass-card bg-bg-card shadow-2xl border border-border p-4 z-50`}
               >
                 <div className="flex items-center justify-between mb-4 pb-2 border-b border-border/50">
                   <h3 className="font-bold text-sm tracking-tight">{t('notifications')}</h3>
@@ -237,16 +265,22 @@ const Topbar = () => {
           </AnimatePresence>
         </div>
 
-        <div className="h-8 w-px bg-border/10 mx-2" />
-        <div className="flex items-center gap-3 pl-2">
-          <div className="text-right hidden sm:block">
-            <p className="text-sm font-bold leading-none">Israa</p>
-            <p className="text-[10px] text-text-secondary uppercase tracking-widest mt-1">Pro Member</p>
+        <div className="h-6 w-px bg-border/10 mx-1 md:mx-2" />
+        <Link href="/myprofile">
+          <div className="flex items-center gap-2 pl-1 cursor-pointer hover:opacity-85 transition-opacity">
+            <div className="text-right hidden sm:block">
+              <p className="text-sm font-bold leading-none">{profile?.name || 'Israa'}</p>
+              <p className="text-[10px] text-text-secondary uppercase tracking-widest mt-1">Pro Member</p>
+            </div>
+            <div className="w-8 h-8 md:w-10 md:h-10 rounded-xl bg-bg-secondary border border-border/10 flex items-center justify-center overflow-hidden">
+              {profile?.avatar_url ? (
+                <img src={profile.avatar_url} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                <User className="w-5 h-5 text-text-secondary" />
+              )}
+            </div>
           </div>
-          <div className="w-10 h-10 rounded-xl bg-bg-secondary border border-border/10 flex items-center justify-center overflow-hidden">
-            <User className="w-6 h-6 text-text-secondary" />
-          </div>
-        </div>
+        </Link>
       </div>
     </div>
   );
@@ -351,9 +385,29 @@ const PersistentFloatingPomodoro = () => {
 export const AppShell = ({ children, hideNav = false, hideTopbar = false }: { children: React.ReactNode, hideNav?: boolean, hideTopbar?: boolean }) => {
   const { language, activePomodoro } = useAppContext();
   const [location] = useLocation();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showTopbar, setShowTopbar] = useState(true);
+  const lastScrollY = useRef(0);
 
   const showFloating = activePomodoro && !location.startsWith('/pomodoro');
   
+  const isChat = location === '/chat';
+  const isTasks = location === '/tasks';
+  const isFullHeight = isChat || isTasks;
+
+  const handleScroll = (e: React.UIEvent<HTMLElement>) => {
+    if (isFullHeight) return; // No scroll tracking needed if full height overflow-hidden
+    const currentScrollY = e.currentTarget.scrollTop;
+    if (currentScrollY > lastScrollY.current && currentScrollY > 60) {
+      // Scrolling down - hide Topbar
+      setShowTopbar(false);
+    } else {
+      // Scrolling up - show Topbar
+      setShowTopbar(true);
+    }
+    lastScrollY.current = currentScrollY;
+  };
+
   if (hideNav) {
     return (
       <div className="min-h-screen bg-bg-primary text-text-primary font-sans selection:bg-accent/30">
@@ -368,16 +422,97 @@ export const AppShell = ({ children, hideNav = false, hideTopbar = false }: { ch
   }
 
   return (
-    <div className="min-h-screen bg-bg-primary text-text-primary font-sans selection:bg-accent/30">
+    <div className="h-screen overflow-hidden bg-bg-primary text-text-primary font-sans selection:bg-accent/30 relative flex">
       <Sidebar />
-      {!hideTopbar && <Topbar />}
-      <main className={`${hideTopbar ? 'pt-4' : 'pt-24'} ${language === 'ar' ? 'pr-24 pl-4' : 'pl-24 pr-4'} min-h-screen transition-all duration-300`}>
-        <div className="max-w-7xl mx-auto pb-12 px-2 md:px-6">
-          {children}
-        </div>
-      </main>
+      <div className="flex-1 flex flex-col h-screen overflow-hidden">
+        {!hideTopbar && (
+          <Topbar 
+            mobileMenuOpen={mobileMenuOpen} 
+            onToggleMobileMenu={() => setMobileMenuOpen(!mobileMenuOpen)} 
+            showTopbar={showTopbar}
+          />
+        )}
+        <main
+          onScroll={handleScroll}
+          className={`flex-1 ${isFullHeight ? "overflow-hidden flex flex-col" : "overflow-y-auto"} ${hideTopbar ? "pt-4" : "pt-20 md:pt-24"} ${
+            language === "ar" 
+              ? "md:pr-20 pr-3 pl-3" 
+              : "md:pl-20 pl-3 pr-3"
+          } ${isFullHeight ? "pb-0" : "pb-12"} transition-all duration-300`}
+        >
+          {isFullHeight ? (
+            <div className={`w-full h-full flex flex-col ${isTasks ? "max-w-7xl mx-auto px-1.5 md:px-4" : ""}`}>
+              {children}
+            </div>
+          ) : (
+            <div className="max-w-7xl mx-auto pb-12 px-1.5 md:px-4">
+              {children}
+            </div>
+          )}
+        </main>
+      </div>
+
+      <MobileDropdownMenu isOpen={mobileMenuOpen} onClose={() => setMobileMenuOpen(false)} />
 
       {showFloating && <PersistentFloatingPomodoro />}
     </div>
+  );
+};
+
+const MobileDropdownMenu = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) => {
+  const [location] = useLocation();
+  const { t, language } = useAppContext();
+
+  const navItems = [
+    { id: 'dashboard', icon: LayoutDashboard, label: t('dashboard'), path: '/dashboard' },
+    { id: 'chat', icon: MessageSquare, label: t('chat'), path: '/chat' },
+    { id: 'plans', icon: Target, label: t('plans'), path: '/plans' },
+    { id: 'tasks', icon: CheckSquare, label: t('tasks'), path: '/tasks' },
+    { id: 'projects', icon: FolderGit2, label: t('projects'), path: '/projects' },
+    { id: 'habits', icon: Activity, label: t('habits'), path: '/habits' },
+    { id: 'notes', icon: StickyNote, label: t('notes'), path: '/notes' },
+    { id: 'favorites', icon: Heart, label: t('favorites'), path: '/favorites' },
+    { id: 'settings', icon: Settings, label: t('settings'), path: '/settings' },
+  ];
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <>
+          {/* Backdrop */}
+          <div 
+            className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm md:hidden cursor-pointer"
+            onClick={onClose}
+          />
+          <motion.div 
+            initial={{ opacity: 0, y: -40, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -40, scale: 0.95 }}
+            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+            className="fixed top-[5.2rem] inset-x-4 bg-bg-card/98 border border-border/80 p-5 rounded-2xl shadow-2xl z-40 md:hidden backdrop-blur-xl max-h-[calc(100vh-6rem)] overflow-y-auto no-scrollbar"
+          >
+            <div className="grid grid-cols-3 gap-3">
+              {navItems.map((item) => {
+                const isActive = location === item.path;
+                return (
+                  <Link key={item.id} href={item.path} onClick={onClose}>
+                    <div className={`flex flex-col items-center justify-center p-3 rounded-2xl border transition-all duration-200 cursor-pointer ${
+                      isActive 
+                        ? 'bg-accent/15 border-accent text-accent shadow-md shadow-accent/5 scale-[1.02]' 
+                        : 'bg-bg-secondary/40 border-transparent text-text-primary hover:bg-bg-secondary/80'
+                    }`}>
+                      <div className={`p-2 rounded-xl mb-1.5 transition-colors ${isActive ? 'bg-accent text-white' : 'bg-bg-secondary text-text-secondary'}`}>
+                        <item.icon className="w-5 h-5" />
+                      </div>
+                      <span className="text-[10px] font-bold tracking-tight text-center">{item.label}</span>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
   );
 };

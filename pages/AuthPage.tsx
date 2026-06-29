@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { useLocation } from 'wouter';
+import { useLocation, Link } from 'wouter';
 import { supabase } from '../lib/supabase';
-import { Mail, Lock, ArrowRight, Loader2, User, Phone, Github, Chrome, Twitter, Facebook, CheckCircle2 } from 'lucide-react';
+import { Mail, Lock, ArrowRight, Loader2, User, Phone, Github, Chrome, CheckCircle2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppContext } from '../context/AppContext';
 
@@ -132,19 +132,14 @@ export default function AuthPage() {
             </div>
 
             {/* Social Logins */}
-            <div className="flex gap-4 mb-8">
+            <div className="mb-8">
               <button 
+                type="button"
                 onClick={handleGoogleLogin}
-                className="flex-1 bg-white/10 hover:bg-white/20 border border-white/20 rounded-full py-2 px-4 flex items-center justify-center gap-2 text-white text-sm transition-all"
+                className="w-full bg-white text-[#2D5A4C] hover:bg-white/90 active:scale-[0.98] border border-transparent rounded-full py-3 px-6 flex items-center justify-center gap-3 font-semibold text-sm transition-all shadow-md cursor-pointer group"
               >
-                <Chrome className="w-4 h-4" />
-                <span className="hidden sm:inline">Sign up with Google</span>
-              </button>
-              <button className="w-12 h-10 bg-white/10 hover:bg-white/20 border border-white/20 rounded-full flex items-center justify-center text-white transition-all">
-                <Facebook className="w-5 h-5" />
-              </button>
-              <button className="w-12 h-10 bg-white/10 hover:bg-white/20 border border-white/20 rounded-full flex items-center justify-center text-white transition-all">
-                <Twitter className="w-5 h-5" />
+                <Chrome className="w-5 h-5 text-accent group-hover:rotate-12 transition-transform duration-300" />
+                <span>{isLogin ? 'Sign in with Google' : 'Sign up with Google'}</span>
               </button>
             </div>
 
@@ -155,7 +150,7 @@ export default function AuthPage() {
               <span className="relative px-4 bg-[#2D5A4C] dark:bg-bg-secondary text-white/40 text-xs uppercase tracking-widest">Or</span>
             </div>
 
-            <form onSubmit={handleEmailAuth} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <form onSubmit={handleEmailAuth} className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               {!isLogin && (
                 <>
                   <div className="space-y-1">
@@ -243,7 +238,7 @@ export default function AuthPage() {
                     {agreeTerms && <CheckCircle2 className="w-4 h-4 text-white" />}
                   </div>
                   <span className="text-[10px] text-white/60">
-                    I agree <span className="text-white underline cursor-pointer">Terms of Service</span> and <span className="text-white underline cursor-pointer">Privacy Policy</span>
+                    I agree to the <Link href="/terms"><span className="text-white underline cursor-pointer hover:text-accent transition-colors">Terms of Service</span></Link> and <Link href="/privacy"><span className="text-white underline cursor-pointer hover:text-accent transition-colors">Privacy Policy</span></Link>
                   </span>
                 </label>
               </div>

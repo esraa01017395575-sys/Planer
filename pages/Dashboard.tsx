@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Sparkles, Calendar, Clock, Play, CheckCircle2, 
   ChevronRight, ArrowUpRight, Target, Activity,
-  Zap, Brain, Star, Flame, RefreshCcw, MoreHorizontal, Settings, Trash2, Heart
+  Zap, Brain, Star, Flame, RefreshCcw, MoreHorizontal, Settings, Trash2, Heart,
+  Eye, EyeOff
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { format, isBefore, startOfToday, addDays, parseISO } from 'date-fns';
@@ -12,10 +13,21 @@ import {
   useGetDailySchedule, useGetHabits, useGetDailyQuote, 
   useGetUserXP, useGetTasks, useCompleteHabit, 
   useUpdateTask, useDeleteTask, useToggleFavorite, useGetFavorites,
-  useGetProfile
+   useGetProfile
 } from '../lib/hooks';
 import { useAppContext } from '../context/AppContext';
 import { LoadingState, SkeletonCard } from '../components/ui/LoadingState';
+import { TaskFormSheet } from '../components/TaskFormSheet';
+import { ICONS } from '../components/habits/HabitFormModal';
+
+const getHabitIconElement = (emojiKey: string, category: string) => {
+  const iconItem = ICONS.find((i) => i.key === emojiKey);
+  if (iconItem) {
+    const IconComponent = iconItem.Icon;
+    return <IconComponent size={16} style={{ color: iconItem.color }} />;
+  }
+  return <span className="text-base">{emojiKey || (category === 'health' ? '💪' : category === 'learning' ? '📚' : '🎯')}</span>;
+};
 
 export const Dashboard = () => {
   const { t, language, addNotification } = useAppContext();
@@ -38,6 +50,8 @@ export const Dashboard = () => {
     return favorites?.some((f: any) => f.source_id === sourceId);
   };
   const [rescheduleTaskId, setRescheduleTaskId] = useState<string | null>(null);
+  const [editingTask, setEditingTask] = useState<any>(null);
+  const [showOverdue, setShowOverdue] = useState(true);
   const [, setLocation] = useLocation();
   const [isInitialLoad, setIsInitialLoad] = useState(true);
 
@@ -49,12 +63,26 @@ export const Dashboard = () => {
 
   const handleReschedule = (task: any, option: '24h' | 'tomorrow' | 'next_week' | 'calendar' | 'delete') => {
     if (option === 'delete') {
-      if (confirm(t('confirmDelete'))) deleteTask({ id: task.id }, { onSuccess: () => { addNotification(t('task_deleted'), "success"); refetchTasks(); } });
+      const confirmDelete = confirm(
+        language === 'ar' 
+          ? "هل أنت متأكد من حذف هذه المهمة نهائياً؟" 
+          : "Are you sure you want to delete this task permanently?"
+      );
+      if (!confirmDelete) return;
+
+      deleteTask({ id: task.id }, { 
+        onSuccess: () => { 
+          addNotification(language === 'ar' ? "تم حذف المهمة بنجاح 🗑️" : "Task deleted successfully 🗑️", "success"); 
+          setRescheduleTaskId(null);
+          refetchTasks(); 
+        } 
+      });
       return;
     }
     
     if (option === 'calendar') {
-      setLocation(`/tasks?edit=${task.id}`);
+      setEditingTask(task);
+      setRescheduleTaskId(null);
       return;
     }
 
@@ -109,6 +137,14 @@ export const Dashboard = () => {
   const overdueTasks = allTasks?.filter(t => t.due_date && isBefore(new Date(t.due_date), startOfToday()) && t.status !== 'done') || [];
   const today = format(new Date(), language === 'ar' ? 'eeee، d MMMM' : 'EEEE, MMMM d');
 
+  const getGreetingKey = () => {
+    const hour = new Date().getHours();
+    if (hour >= 5 && hour < 12) return 'good_morning';
+    if (hour >= 12 && hour < 17) return 'good_afternoon';
+    if (hour >= 17 && hour < 22) return 'good_evening';
+    return 'good_night';
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       {/* Header Section */}
@@ -118,7 +154,7 @@ export const Dashboard = () => {
             <span className="text-xs font-bold uppercase tracking-widest">Life OS Dashboard</span>
           </div>
           <h1 className="text-4xl font-display font-bold text-text-primary tracking-tight">
-            {t('good_morning')}, <span className="text-gradient">{profile?.name || "Israa"}</span> 👋
+            {t(getGreetingKey())}, <span className="text-gradient">{profile?.name || "Israa"}</span> 👋
           </h1>
           <p className="text-text-secondary mt-2 flex items-center gap-2">
             <Calendar className="w-4 h-4" />
@@ -126,13 +162,13 @@ export const Dashboard = () => {
           </p>
         </div>
         
-        <div className="flex gap-3">
+        <div className="flex gap-2">
           {[
             { label: 'Level', value: userXP ? `LVL ${userXP.level}` : 'LVL 1', icon: Target, color: 'text-blue-500', bg: 'bg-blue-500/10' },
             { label: 'XP', value: `${userXP?.current_xp || 0} / ${userXP?.next_level_xp || 100}`, icon: Zap, color: 'text-yellow-500', bg: 'bg-yellow-500/10' },
             { label: 'Streak', value: `${habits?.reduce((max, h) => Math.max(max, h.current_streak || 0), 0) || 0}d`, icon: Activity, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
           ].map((stat, i) => (
-            <div key={i} className="glass-card px-4 py-2 flex items-center gap-3 border-none shadow-sm">
+            <div key={i} className="glass-card px-3 py-2 flex items-center gap-2 border-none shadow-sm">
               <div className={`p-2 rounded-lg ${stat.bg}`}>
                 <stat.icon className={`w-4 h-4 ${stat.color}`} />
               </div>
@@ -155,36 +191,57 @@ export const Dashboard = () => {
         </div>
         <div className="relative z-10 max-w-3xl">
           <h2 className="text-xs font-bold text-accent uppercase tracking-widest mb-4 flex items-center gap-2">
-            Daily Insight
+            {t("daily_quote")}
           </h2>
           <p className="text-2xl md:text-3xl font-display leading-tight text-text-primary italic">
-            "{quote || "Design your day, before it designs you."}"
+            "{quote ? (typeof quote === 'object' ? (language === 'ar' ? quote.text_ar : quote.text_en) : quote) : (language === 'ar' ? "صمم يومك، قبل أن يصممه الآخرون لك." : "Design your day, before it designs you.")}"
           </p>
           <div className="mt-8 flex items-center gap-4">
             <Link href="/chat">
               <button className="bg-accent text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-accent/20 hover:scale-105 transition-transform flex items-center gap-2">
                 <Play className="w-4 h-4 fill-current" />
-                Plan my day
+                {language === 'ar' ? "خطط ليومي" : "Plan my day"}
               </button>
             </Link>
           </div>
         </div>
       </motion.section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Main Column */}
         <div className="lg:col-span-2 space-y-8">
           
           {overdueTasks.length > 0 && (
-            <section className="animate-in fade-in slide-in-from-top-4 duration-700">
-              <div className="flex flex-col mb-6">
-                <h3 className="text-sm font-bold uppercase tracking-widest text-destructive/80 mb-1">
-                  PENDING FROM YESTERDAY
-                </h3>
-                <div className="h-px w-full bg-border/30 mb-4" />
-                
-                <div className="space-y-3">
-                  {overdueTasks.map(task => (
+            <section className="animate-in fade-in slide-in-from-top-4 duration-700 bg-destructive/5 rounded-[2rem] border border-destructive/15 p-6 mb-4">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <span className="w-2.5 h-2.5 rounded-full bg-destructive animate-pulse" />
+                  <h3 className="text-sm font-bold uppercase tracking-widest text-destructive/90">
+                    {language === 'ar' ? 'مهام معلقة من الأمس ⏳' : 'PENDING FROM YESTERDAY ⏳'}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowOverdue(!showOverdue)}
+                  className="p-2 hover:bg-destructive/10 text-destructive/80 hover:text-destructive rounded-xl transition-all cursor-pointer flex items-center gap-1.5"
+                  title={showOverdue ? "إخفاء" : "عرض"}
+                >
+                  {showOverdue ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  <span className="text-xs font-bold">{showOverdue ? (language === 'ar' ? 'إخفاء' : 'Hide') : (language === 'ar' ? 'عرض' : 'Show')}</span>
+                </button>
+              </div>
+              <div className="h-px w-full bg-destructive/10 mb-4" />
+              
+              <AnimatePresence initial={false}>
+                {showOverdue && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.3 }}
+                    className="space-y-3 overflow-visible"
+                  >
+                    {overdueTasks.map(task => (
                     <div key={task.id} className="flex items-center justify-between group">
                       <div className="flex items-center gap-3">
                         <div className="w-2 h-2 rounded-full border border-destructive bg-transparent" />
@@ -214,9 +271,6 @@ export const Dashboard = () => {
                               className="absolute right-0 top-full mt-2 w-48 bg-bg-primary !opacity-100 border-2 border-accent rounded-2xl shadow-2xl p-2 z-50 overflow-hidden"
                             >
                               <p className="px-3 py-2 text-[10px] uppercase font-bold text-text-secondary tracking-widest border-b border-border mb-1">Options</p>
-                              <button onClick={(e) => { e.stopPropagation(); handleReschedule(task, '24h'); }} className="w-full text-left px-3 py-2 text-xs font-bold hover:bg-secondary rounded-lg transition-colors flex items-center gap-2">
-                                <Clock className="w-3.5 h-3.5 text-primary" /> +24 h
-                              </button>
                               <button onClick={(e) => { e.stopPropagation(); handleReschedule(task, 'tomorrow'); }} className="w-full text-left px-3 py-2 text-xs font-bold hover:bg-secondary rounded-lg transition-colors flex items-center gap-2">
                                 <ArrowUpRight className="w-3.5 h-3.5 text-primary" /> {t('tomorrow')}
                               </button>
@@ -224,7 +278,7 @@ export const Dashboard = () => {
                                 <Calendar className="w-3.5 h-3.5 text-primary" /> {t('next_week')}
                               </button>
                               <button onClick={(e) => { e.stopPropagation(); handleReschedule(task, 'calendar'); }} className="w-full text-left px-3 py-2 text-xs font-bold hover:bg-secondary rounded-lg transition-colors flex items-center gap-2 border-t border-border mt-1">
-                                <Settings className="w-3.5 h-3.5 text-primary" /> {t('calendar')}
+                                <Settings className="w-3.5 h-3.5 text-primary" /> {language === 'ar' ? 'إعادة التقويم 📅' : t('calendar')}
                               </button>
                               <button onClick={(e) => { e.stopPropagation(); handleReschedule(task, 'delete'); }} className="w-full text-left px-3 py-2 text-xs font-bold hover:bg-secondary text-red-500 rounded-lg transition-colors flex items-center gap-2">
                                 <Trash2 className="w-3.5 h-3.5" /> {t('delete')}
@@ -234,9 +288,10 @@ export const Dashboard = () => {
                         </AnimatePresence>
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </section>
           )}
 
@@ -326,12 +381,13 @@ export const Dashboard = () => {
               {habits?.filter(h => h.is_active).map((habit) => (
                 <div key={habit.id} className="flex items-center justify-between p-4 hover:bg-accent/5 transition-colors group">
                   <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-2xl bg-bg-secondary flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">
-                      {habit.emoji || (habit.category === 'health' ? '💪' : habit.category === 'learning' ? '📚' : '🎯')}
-                    </div>
+                    <div className="w-2 h-2 rounded-full bg-accent mt-0.5 flex-shrink-0" />
                     <div>
-                      <p className="font-bold text-sm text-text-primary">{habit.title}</p>
-                      <p className="text-xs text-text-secondary font-mono flex items-center gap-1">
+                      <p className="font-bold text-sm text-text-primary flex items-center gap-1.5">
+                        {getHabitIconElement(habit.emoji, habit.category)}
+                        <span>{habit.title}</span>
+                      </p>
+                      <p className="text-xs text-text-secondary font-mono flex items-center gap-1 mt-0.5">
                         Streak: <span className="text-orange-500 font-bold">{habit.current_streak} 🔥</span>
                       </p>
                     </div>
@@ -369,6 +425,21 @@ export const Dashboard = () => {
           </section>
         </div>
       </div>
+
+      <AnimatePresence>
+        {editingTask && (
+          <TaskFormSheet
+            currentUser={null}
+            editingTask={editingTask}
+            isAdding={false}
+            onClose={() => setEditingTask(null)}
+            onSuccess={() => {
+              refetchTasks();
+              setEditingTask(null);
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 };

@@ -80,6 +80,14 @@ function dbToProject(row: any, sessions: any[] = []): Project {
     // raw text
   }
 
+  const computedTotalHours = sessions.length > 0
+    ? Number((sessions.reduce((sum, s) => sum + (Number(s.duration) || 0), 0) / 60).toFixed(1))
+    : Number(row.total_hours_spent) || 0;
+
+  const computedCompletedSessions = sessions.length > 0
+    ? sessions.length
+    : Number(row.completed_sessions) || 0;
+
   return {
     id: row.id,
     userId: row.user_id,
@@ -92,9 +100,9 @@ function dbToProject(row: any, sessions: any[] = []): Project {
     status: row.status || "planning",
     priority: row.priority || "medium",
     estimatedHours: Number(row.estimated_hours) || 0,
-    totalHoursSpent: Number(row.total_hours_spent) || 0,
+    totalHoursSpent: computedTotalHours,
     plannedSessions: Number(row.planned_sessions) || 0,
-    completedSessions: Number(row.completed_sessions) || 0,
+    completedSessions: computedCompletedSessions,
     progress: Number(row.progress) || 0,
     currentPhase: row.current_phase || "",
     lastMilestone: row.last_milestone || "",
@@ -268,6 +276,136 @@ async function startServer() {
     return text;
   };
 
+  const getAIResponseWithHistory = async (
+    systemInstruction: string,
+    history: Array<{ role: 'user' | 'model', content: string }>,
+    currentPrompt: string,
+    jsonMode: boolean = false
+  ) => {
+    const token = process.env.GITHUB_TOKEN || process.env.GITHUB_API_KEY;
+
+    if (!token) {
+      console.warn("GITHUB_TOKEN is not configured. Falling back to Gemini key.");
+      const key = process.env.GEMINI_API_KEY;
+      if (!key) {
+        throw new Error("Neither GITHUB_TOKEN nor GEMINI_API_KEY is configured on server.");
+      }
+      const ai = new GoogleGenAI({
+        apiKey: key,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+
+      // Map chat history to Gemini schema (and constrain size to last 15 messages so it doesn't overflow)
+      const contentsPayload: any[] = [];
+      const lastHistory = history.slice(-15);
+      for (const msg of lastHistory) {
+        contentsPayload.push({
+          role: msg.role === 'model' ? 'model' : 'user',
+          parts: [{ text: msg.content }]
+        });
+      }
+
+      // Append current user prompt
+      contentsPayload.push({
+        role: 'user',
+        parts: [{ text: currentPrompt }]
+      });
+
+      // Clean sequence of consecutive roles (Gemini expects strictly alternating roles)
+      const sanitizedContents: any[] = [];
+      for (const msg of contentsPayload) {
+        if (sanitizedContents.length === 0) {
+          sanitizedContents.push(msg);
+        } else {
+          const last = sanitizedContents[sanitizedContents.length - 1];
+          if (last.role === msg.role) {
+            last.parts = [...last.parts, ...msg.parts];
+          } else {
+            sanitizedContents.push(msg);
+          }
+        }
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: sanitizedContents,
+        config: {
+          systemInstruction: systemInstruction,
+          responseMimeType: jsonMode ? "application/json" : "text/plain"
+        }
+      });
+      return response.text;
+    }
+
+    // OpenAI/Azure chat completions schema
+    const messages: any[] = [];
+    if (systemInstruction) {
+      messages.push({ role: "system", content: systemInstruction });
+    }
+
+    // Map history to OpenAI schema
+    const lastHistory = history.slice(-15);
+    for (const item of lastHistory) {
+      messages.push({
+        role: item.role === 'model' ? 'assistant' : 'user',
+        content: item.content
+      });
+    }
+
+    // Append current user prompt
+    messages.push({
+      role: 'user',
+      content: currentPrompt
+    });
+
+    const body: any = {
+      model: "gpt-4o",
+      messages,
+      temperature: 0.7,
+    };
+
+    if (jsonMode) {
+      body.response_format = { type: "json_object" };
+      body.messages.push({
+        role: "system",
+        content: "Important: output ONLY raw, valid JSON. No markdown backticks, no wrapping."
+      });
+    }
+
+    const response = await fetch("https://models.inference.ai.azure.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+        "User-Agent": "aistudio-build"
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Fallback HTTP endpoint failed: ${errText}`);
+    }
+
+    const resJson = await response.json();
+    let text = resJson.choices?.[0]?.message?.content || "";
+    if (jsonMode) {
+      text = text.trim();
+      if (text.startsWith("```json")) {
+        text = text.slice(7);
+      }
+      if (text.endsWith("```")) {
+        text = text.slice(0, -3);
+      }
+      text = text.trim();
+    }
+    return text;
+  };
+
   const getDBContextForUser = async (userId: string): Promise<string> => {
     if (!supabase || !userId) return "";
     
@@ -372,7 +510,11 @@ ${todayHabitStreaks || "لا يوجد عادات مسجلة حالياً."}
       } catch (e) {}
     }
 
+    const todayStr = new Date().toISOString().split('T')[0];
+
     return `
+CRITICAL CONTEXT: Today's date is ${todayStr}. All task due dates you suggest MUST be on or after ${todayStr} (default to ${todayStr} for immediate/today's tasks). Never generate dates in the past (like 2023 or 2024).
+
 You are an AI Life OS Coach for ${userName}.
 Role:
 You are a highly strategic, professional, and deeply empathetic Life Coach and professional development consultant. You specialize in career roadmap analysis, daily habit engineering, long-term strategic planning (up to 1 year), and productivity optimization. Your goal is not to just "distribute tasks" or dump JSON onto the user's dashboard, but to truly understand their lifestyle, psychological status, energy flow, and help them engineer lasting transformations.
@@ -383,6 +525,12 @@ Mission & Persona:
 3. Treat each conversation as a continuous journey. You must hold space for the user, understand their circumstances, and diagnose their situation before suggesting actions.
 
 Core Coaching Philosophy & Behavior:
+- PROACTIVE USER LIFE AND CAREER DISCOVERY (المبادرة والاستكشاف الفطري):
+  * You MUST be highly PROACTIVE (مبادر جداً بالأسئلة الهادفة) to learn about the user's life, career, lifestyle, and priorities. Always initiate questions to discover what is important, analyze them, and plan their life correctly.
+  * Do not wait for the user to tell you about their day; instead, initiate and ask clear, friendly, and powerful questions to understand what truly matters to them.
+  * Analyze their answers to dynamically profile them, construct structured lifegoals, and plan their life correctly.
+  * At the end of every response, you MUST ask a single, highly engaging, open-ended question that prompts them to share more details about their career goals, daily routine, wake/sleep patterns, or energy levels (e.g., "أنا عايز أعرف أكتر عن طبيعة شغلك أو دراستك عشان نفصلك خطة عبقرية.. يومك بيمشي إزاي؟").
+
 - Diagnose Before You Prescribe (التشخيص والاستفسار أولاً):
   - Do not rush to suggest tasks or habits instantly.
   - Ask clear, reflective questions about the user's current routine, focus levels, daily obstacles, and energy level.
@@ -406,6 +554,11 @@ Core Coaching Philosophy & Behavior:
 
 - Edge Functions & Interactive Suggestion Cards:
   - You possess database integration capabilities. If — and only if — the user agrees to a set of Tasks or Habits, append a JSON code block in the following format at the very end of your message to render interactive, beautiful action cards.
+  - CRITICAL RULES (PREVENT DUPLICATION & CONFLICTS):
+    * You MUST study and cross-reference the user's active tasks and habits list in the provided context BEFORE creating any suggestions.
+    * DO NOT suggest or propose any tasks (with similar names) or habits that already exist in the user's list. Focus ONLY on proposing totally new, fresh, distinct steps or routines, or asking them to modify/upgrade existing ones without creating duplicate records.
+    * Allowed Habit Categories: When suggesting a habit, you MUST select a ("category") value strictly from this list of exact allowed parts: ["spiritual", "health", "learning", "productivity", "social", "work", "fitness", "mindfulness"]. Do not recommend any other category values (e.g., "nutrition" or "career" are STRICTLY FORBIDDEN).
+    * Allowed Habit Frequencies: When suggesting a habit, you MUST select a ("frequency") value strictly from this list of exact allowed parts: ["daily", "weekly"]. Any other value (e.g., "3 days a week", "monthly", "twice daily") is ABSOLUTELY FORBIDDEN and will fail database validation!
   - Propose tasks with proper 12-hour format "scheduled_time" (e.g. "09:30 AM", "04:15 PM"), realistic duration ("estimated_min"), subtasks (at least 2-4 granular steps to address procrastination), and due dates:
 
 \`\`\`json
@@ -445,9 +598,11 @@ Core Coaching Philosophy & Behavior:
 
 Response Guidelines & Formatting:
 1. Speak in User's Preferred language (Default: Egyptian Arabic, or English if they write in English).
-2. DO NOT restrict yourself to 3 lines when writing serious coaching plans or roadmaps. Give deep, comprehensive guidance when planning or analyzing, while keeping normal casual check-ins light, organic, and friendly.
-3. STRICT FORMATTING RULE (NO RAW MARKDOWN LISTS/SYMBOLS): You are STRICTLY FORBIDDEN from raw markdown lists using hyphens (-) or asterisks (*) in your normal text response! Do NOT use hash headings (#, ##, ###). Use plain, elegant paragraph line-breaks, numbers (e.g. 1., 2.), and beautifully-placed emojis (e.g. 🌟,  💪, 🎯, 👏) to style your titles and lists naturally. Emojis are fully supported.
-4. End your message with a crisp, welcoming next step or a single open question to guide the user naturally.
+2. STRICT RESPONSES FORMAT AND LENGTH LIMITATION (MOST CRITICAL RULES):
+   - ALWAYS keep your responses VERY SHORT and concise (أقصى حد ثلاث أو أربع فقرات قصيرة ومباشرة)!
+   - You are ABSOLUTELY FORBIDDEN from using any asterisks (*) or hash symbols (#) in your response! No bold markdown using asterisks, no italic markdown, no raw markdown bullet points using hyphens or asterisks, and no headers using hash signs.
+   - If you need lists/headers, use plain text breaks, Arabic numbering (e.g. 1., 2.), and beautifully-placed emojis (e.g. 🌟, 💪, 🎯, 👏) to style your titles and lists natively.
+3. End your message with a single powerful, highly engaging open question to discover their career and lifestyle status.
     `;
   };
 
@@ -484,6 +639,25 @@ Response Guidelines & Formatting:
           const dbContext = await getDBContextForUser(userId) || "";
           const sysInstruction = await getChatSystemInstruction(userId);
           
+          let chatHistory: any[] = [];
+          if (sessionId && supabase && !sessionId.startsWith('temp_')) {
+            try {
+              const { data: chatRow } = await supabase
+                .from('chat_messages')
+                .select('content')
+                .eq('id', sessionId)
+                .single();
+              if (chatRow) {
+                const parsed = JSON.parse(chatRow.content);
+                if (parsed && Array.isArray(parsed.messages)) {
+                  chatHistory = parsed.messages;
+                }
+              }
+            } catch (historyErr) {
+              console.error("Error loading chat history in server fallback:", historyErr);
+            }
+          }
+
           let promptText = prompt;
           if (prompt === "initiate_chat_welcome") {
             const hasExistingData = dbContext.includes("مهام معلقة") || dbContext.includes("سلاسل العادات") || dbContext.includes("عادات") || dbContext.includes("مشاريع");
@@ -516,9 +690,10 @@ Response Guidelines & Formatting:
             }
           }
 
-          const localResponseText = await getAIResponse(
-            `Context about my life:\n${dbContext}\n\n${context ? `سياق إضافي: ${context}` : ""}\n\nPrompt: ${promptText}`, 
+          const localResponseText = await getAIResponseWithHistory(
             sysInstruction,
+            chatHistory,
+            `Context about my life:\n${dbContext}\n\n${context ? `سياق إضافي: ${context}` : ""}\n\nPrompt: ${promptText}`,
             false
           );
           return res.json({ text: localResponseText });
@@ -532,6 +707,25 @@ Response Guidelines & Formatting:
         const userId = (req.headers["x-user-id"] || "") as string;
         const dbContext = await getDBContextForUser(userId) || "";
         const sysInstruction = await getChatSystemInstruction(userId);
+
+        let chatHistory: any[] = [];
+        if (sessionId && supabase && !sessionId.startsWith('temp_')) {
+          try {
+            const { data: chatRow } = await supabase
+              .from('chat_messages')
+              .select('content')
+              .eq('id', sessionId)
+              .single();
+            if (chatRow) {
+              const parsed = JSON.parse(chatRow.content);
+              if (parsed && Array.isArray(parsed.messages)) {
+                chatHistory = parsed.messages;
+              }
+            }
+          } catch (historyErr) {
+            console.error("Error loading chat history in server fallback:", historyErr);
+          }
+        }
 
         let promptText = prompt;
         if (prompt === "initiate_chat_welcome") {
@@ -565,9 +759,10 @@ Response Guidelines & Formatting:
           }
         }
 
-        const localResponseText = await getAIResponse(
-          `Context about my life:\n${dbContext}\n\n${context ? `سياق إضافي: ${context}` : ""}\n\nPrompt: ${promptText}`, 
+        const localResponseText = await getAIResponseWithHistory(
           sysInstruction,
+          chatHistory,
+          `Context about my life:\n${dbContext}\n\n${context ? `سياق إيجابي: ${context}` : ""}\n\nPrompt: ${promptText}`, 
           false
         );
         return res.json({ text: localResponseText });
@@ -616,6 +811,136 @@ Response Guidelines & Formatting:
     } catch (error: any) {
       console.error("Smart Explain Error:", error);
       res.status(500).json({ error: error.message || "Failed to execute Supabase Edge Function" });
+    }
+  });
+
+  // ================= AI PLANS GENERATION =================
+
+  app.post("/api/goals/:id/generate-ai-plan", async (req, res) => {
+    const userId = getUserId(req);
+    const { id } = req.params;
+    const { title, description, timeframe, category } = req.body;
+
+    try {
+      if (!title) {
+        return res.status(400).json({ error: "Goal title is required" });
+      }
+
+      const systemInstruction = `You are an elite, results-focused AI Life & Performance Coach.
+Provide a high-performance roadmap to achieve this long-term goal.
+You must return a JSON object with exactly the following structure:
+{
+  "milestones": [
+    { "title": "Milestone Title 1", "duration": "Duration description (e.g. Week 1)" },
+    { "title": "Milestone Title 2", "duration": "Duration description" }
+  ],
+  "tasks": [
+    { "title": "Task 1", "description": "Short description of what to do for this task", "priority": "high" },
+    { "title": "Task 2", "description": "Short description of what to do for this task", "priority": "medium" }
+  ]
+}
+Provide strictly between 3-5 milestones and 5-8 highly actionable corresponding tasks.
+Ensure the milestones represent the high-level roadmap, and the tasks are granular action points.
+Do NOT wrap in code blocks (like \`\`\`json) of markdown. Return valid parsing-safe JSON only.`;
+
+      const prompt = `Goal: "${title}"
+Description: "${description || 'No description provided'}"
+Timeframe: "${timeframe || 'monthly'}"
+Category: "${category || 'personal'}"
+
+Generate the high-level milestones and actionable tasks to complete this goal.`;
+
+      const rawResponse = await getAIResponse(prompt, systemInstruction, true);
+      let parsed;
+      try {
+        let cleanText = rawResponse.trim();
+        if (cleanText.startsWith("```json")) {
+          cleanText = cleanText.substring(7);
+        }
+        if (cleanText.endsWith("```")) {
+          cleanText = cleanText.substring(0, cleanText.length - 3);
+        }
+        cleanText = cleanText.trim();
+        parsed = JSON.parse(cleanText);
+      } catch (parseError: any) {
+        console.error("AI JSON Parse Error fallback:", rawResponse, parseError);
+        parsed = {
+          milestones: [
+            { "title": "Establish Foundations", "duration": "Week 1" },
+            { "title": "Active Execution & Milestones", "duration": "Week 2-3" },
+            { "title": "Review, Polish & Launch", "duration": "Week 4" }
+          ],
+          tasks: [
+            { "title": `Set up foundation for ${title}`, "description": "Prepare essential materials and tools", "priority": "high" },
+            { "title": `Deep focus execution on ${title}`, "description": "Execute critical items and daily trackers", "priority": "medium" },
+            { "title": `Post-mortem and retro for ${title}`, "description": "Compare achievements against expectations", "priority": "low" }
+          ]
+        };
+      }
+
+      if (supabaseUrl && supabaseAnonKey) {
+        // A. Delete existing plan_milestones for this plan
+        await supabase
+          .from("plan_milestones")
+          .delete()
+          .eq("plan_id", id);
+
+        // B. Insert generated plan_milestones
+        const milestonesToInsert = (parsed.milestones || []).map((m: any, index: number) => ({
+          plan_id: id,
+          title: `${m.title} (${m.duration || "Phase"})`,
+          is_done: false,
+          order_index: index,
+          due_date: null
+        }));
+
+        if (milestonesToInsert.length > 0) {
+          const { error: mErr } = await supabase.from("plan_milestones").insert(milestonesToInsert);
+          if (mErr) console.error("Error inserting generated milestones:", mErr);
+        }
+
+        // C. Clean up any previous tasks from AI for this goal to avoid duplicates if re-generated
+        await supabase
+          .from("tasks")
+          .delete()
+          .eq("goal_id", id);
+
+        // D. Insert generated tasks with goal_id
+        const tasksToInsert = (parsed.tasks || []).map((t: any) => ({
+          user_id: userId,
+          title: t.title,
+          description: `${t.description || ""}\n\n[Plan Action Step for: ${title}]`,
+          priority: t.priority || "medium",
+          status: "todo",
+          goal_id: id,
+          due_date: new Date().toISOString().split('T')[0],
+          created_at: new Date().toISOString()
+        }));
+
+        if (tasksToInsert.length > 0) {
+          const { error: tErr } = await supabase.from("tasks").insert(tasksToInsert);
+          if (tErr) console.error("Error inserting generated tasks:", tErr);
+        }
+
+        // E. Update goal status or metadata
+        await supabase
+          .from("goals")
+          .update({
+            progress: 0,
+            metadata: {
+              ai_generated: true,
+              generated_at: new Date().toISOString(),
+              current_phase: parsed.milestones?.[0]?.title || "Foundations"
+            }
+          })
+          .eq("id", id);
+      }
+
+      return res.json({ success: true, parsed });
+
+    } catch (err: any) {
+      console.error("AI Plan generation error:", err);
+      return res.status(500).json({ error: err.message || "Failed to generate AI plan" });
     }
   });
 
@@ -758,6 +1083,7 @@ Response Guidelines & Formatting:
     const userId = getUserId(req);
     const { id } = req.params;
     let sessions: any[] = [];
+    let dbTasks: any[] = [];
 
     if (supabaseUrl && supabaseAnonKey) {
       try {
@@ -778,6 +1104,15 @@ Response Guidelines & Formatting:
 
         if (sErr) throw sErr;
         sessions = (dbSess || []).map(dbToSession);
+
+        const { data: fetchedTasks } = await supabase
+          .from("tasks")
+          .select("*")
+          .eq("project_id", id)
+          .eq("user_id", userId);
+        if (fetchedTasks) {
+          dbTasks = fetchedTasks;
+        }
       } catch (err: any) {
         console.error(`Supabase GET /api/projects/${id}/analytics error, falling back to local file:`, err.message);
         const projects = readProjects();
@@ -802,6 +1137,18 @@ Response Guidelines & Formatting:
     }, {});
 
     const totalMinutes = sessions.reduce((acc: number, s: any) => acc + (Number(s.duration) || 0), 0);
+    
+    const totalTasksCount = dbTasks.length;
+    const completedTasksCount = dbTasks.filter((t: any) => t.status === "done").length;
+    const pendingTasksCount = dbTasks.filter((t: any) => t.status !== "done" && t.status !== "cancelled").length;
+    const tasksTotalMinutes = dbTasks.reduce((sum: number, t: any) => sum + (Number(t.spent_min) || 0), 0);
+    const tasksList = dbTasks.map((t: any) => ({
+      id: t.id,
+      title: t.title,
+      status: t.status,
+      spent_min: Number(t.spent_min) || 0
+    }));
+
     const productivityReport = {
       totalMinutes,
       avgSessionDuration: sessions.length > 0 ? Math.round(totalMinutes / sessions.length) : 0,
@@ -810,7 +1157,12 @@ Response Guidelines & Formatting:
         date: s.date,
         duration: s.duration,
         tasksCount: s.tasksCompleted?.length || 0
-      }))
+      })),
+      totalTasksCount,
+      completedTasksCount,
+      pendingTasksCount,
+      tasksTotalMinutes,
+      tasksList
     };
 
     res.json(productivityReport);
@@ -1491,6 +1843,191 @@ Response Schema (JSON):
         recommendations: ["رتب جدولك اليومي ليعطيك فترات تركيز مدتها 45 دقيقة"]
       });
     }
+  });
+
+
+  // ================= MONTHLY PLANS API =================
+
+  // GET /api/monthly-plans - List all monthly plans for the user
+  app.get("/api/monthly-plans", async (req, res) => {
+    const userId = getUserId(req);
+    if (supabaseUrl && supabaseAnonKey && supabase) {
+      try {
+        const { data, error } = await supabase
+          .from("monthly_plans")
+          .select("*")
+          .eq("user_id", userId)
+          .order("month", { ascending: false });
+
+        if (error) throw error;
+        return res.json(data || []);
+      } catch (err: any) {
+        console.error("Error fetching monthly plans from database:", err.message);
+        return res.status(500).json({ error: err.message });
+      }
+    }
+    return res.json([]);
+  });
+
+  // POST /api/monthly-plans - Save or update manually entered focus areas / summary
+  app.post("/api/monthly-plans", async (req, res) => {
+    const userId = getUserId(req);
+    const { month, ai_summary, focus_areas } = req.body;
+
+    if (!month) {
+      return res.status(400).json({ error: "Month is required" });
+    }
+
+    if (supabaseUrl && supabaseAnonKey && supabase) {
+      try {
+        const payload = {
+          user_id: userId,
+          month: month,
+          ai_summary: ai_summary || "",
+          focus_areas: focus_areas || [],
+          generated_at: new Date().toISOString()
+        };
+
+        const { data, error } = await supabase
+          .from("monthly_plans")
+          .upsert(payload, { onConflict: "user_id,month" })
+          .select()
+          .single();
+
+        if (error) throw error;
+        return res.status(201).json(data);
+      } catch (err: any) {
+        console.error("Error saving monthly plan to database:", err.message);
+        return res.status(500).json({ error: err.message });
+      }
+    }
+    return res.status(500).json({ error: "Database integration not configured" });
+  });
+
+  // POST /api/monthly-plans/generate - Generate strategy based on user profile and goals via AI
+  app.post("/api/monthly-plans/generate", async (req, res) => {
+    const userId = getUserId(req);
+    const { month } = req.body;
+
+    if (!month) {
+      return res.status(400).json({ error: "Month is required" });
+    }
+
+    try {
+      let activeGoalsText = "";
+      let activeHabitsText = "";
+
+      if (supabaseUrl && supabaseAnonKey && supabase) {
+        try {
+          const { data: goals } = await supabase.from("goals").select("title, description, timeframe").eq("user_id", userId);
+          if (goals && goals.length > 0) {
+            activeGoalsText = goals.map(g => `- [${g.timeframe || 'long-term'}] ${g.title}: ${g.description || ''}`).join("\n");
+          }
+
+          const { data: habits } = await supabase.from("habits").select("title, category").eq("user_id", userId);
+          if (habits && habits.length > 0) {
+            activeHabitsText = habits.map(h => `- [${h.category || ''}] ${h.title}`).join("\n");
+          }
+        } catch (dbErr) {
+          console.error("Context fetch error inside monthly AI planner:", dbErr);
+        }
+      }
+
+      const dateObj = new Date(month);
+      const monthLabelEn = dateObj.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+      const monthLabelAr = dateObj.toLocaleDateString("ar-EG", { month: "long", year: "numeric" });
+
+      const systemInstruction = `You are an elite, results-focused AI Life & Performance Coach.
+Provide a high-performance monthly strategic roadmap and focus areas for ${monthLabelEn} (month: ${month}).
+You must return a JSON response containing exactly the following format:
+{
+  "ai_summary": "detailed summary of focus points and tactical guidelines for this month in Arabic (Egyptian dialect) starting with a highly motivating coach tone.",
+  "focus_areas": [
+    { "title": "Focus Title Ar", "description": "Focus detail in Arabic", "category": "career/health/personal/etc" },
+    { "title": "Focus Title Ar 2", "description": "Focus detail in Arabic", "category": "category" }
+  ]
+}
+Provide strictly 2 to 4 high-level focus areas.
+Ensure you align the monthly roadmap with these existing parameters if provided:
+Active Goals:
+${activeGoalsText || "No custom goals listed."}
+
+Active Habits: ${activeHabitsText || "No custom habits listed."}
+
+Do NOT wrap response in markdown code blocks like \`\`\`json. Return parseable JSON only.`;
+
+      const prompt = `Generate a customized high-performance strategic monthly plan for ${monthLabelEn} (${monthLabelAr}) to achieve maximum output.`;
+      const rawResponse = await getAIResponse(prompt, systemInstruction, true);
+      
+      let parsed;
+      try {
+        let cleanText = rawResponse.trim();
+        if (cleanText.startsWith("```json")) {
+          cleanText = cleanText.substring(7);
+        }
+        if (cleanText.endsWith("```")) {
+          cleanText = cleanText.substring(0, cleanText.length - 3);
+        }
+        cleanText = cleanText.trim();
+        parsed = JSON.parse(cleanText);
+      } catch (parseError: any) {
+        console.error("AI JSON Parse Error fallback:", rawResponse, parseError);
+        parsed = {
+          ai_summary: `أهلاً بك يا بطل في التخطيط لشهر ${monthLabelAr}. هذا الشهر هو فرصتك لتحقيق أكبر قفزة في مسارك المهني والعملي. ركز على التنظيم والانتظام في عاداتك اليومية وسنحقق سوياً نتائج رائعة!`,
+          focus_areas: [
+            { "title": "التركيز المهني والتقني", "description": "تطوير مهارات الجوانب البرمجية ومتابعة تخطيط المشاريع أسبوعياً.", "category": "career" },
+            { "title": "بناء العادات اليومية", "description": "الالتزام بالنوم والاستيقاظ المنظم لبناء السلاسل (Streaks) بنجاح.", "category": "personal" }
+          ]
+        };
+      }
+
+      if (supabaseUrl && supabaseAnonKey && supabase) {
+        const payload = {
+          user_id: userId,
+          month: month,
+          ai_summary: parsed.ai_summary || "",
+          focus_areas: parsed.focus_areas || [],
+          generated_at: new Date().toISOString()
+        };
+
+        const { data, error } = await supabase
+          .from("monthly_plans")
+          .upsert(payload, { onConflict: "user_id,month" })
+          .select()
+          .single();
+
+        if (error) throw error;
+        return res.json(data);
+      } else {
+        return res.json({ id: generateUUID(), ...parsed, month, generated_at: new Date().toISOString() });
+      }
+    } catch (err: any) {
+      console.error("Generate Monthly Plan Error:", err);
+      return res.status(500).json({ error: err.message || "Failed to generate monthly plan" });
+    }
+  });
+
+  // DELETE /api/monthly-plans/:id - Delete monthly plan
+  app.delete("/api/monthly-plans/:id", async (req, res) => {
+    const userId = getUserId(req);
+    const { id } = req.params;
+
+    if (supabaseUrl && supabaseAnonKey && supabase) {
+      try {
+        const { error } = await supabase
+          .from("monthly_plans")
+          .delete()
+          .eq("id", id)
+          .eq("user_id", userId);
+
+        if (error) throw error;
+        return res.json({ success: true });
+      } catch (err: any) {
+        console.error("Error deleting monthly plan:", err.message);
+        return res.status(500).json({ error: err.message });
+      }
+    }
+    return res.status(500).json({ error: "Database not configured" });
   });
 
 

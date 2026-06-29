@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useUpdateTask, useDeleteTask } from '../lib/hooks';
 import { useAppContext } from '../context/AppContext';
+import { supabase } from '../lib/supabase';
 
 type Priority = 'low' | 'medium' | 'high';
 type Status = 'todo' | 'in_progress' | 'done' | 'cancelled';
@@ -21,9 +22,11 @@ type Task = {
   scheduled_time?: string | null;
   end_time?: string | null;
   estimated_min?: number | null;
+  spent_min?: number | null;
   pomodoro_type?: PomodoroType | null;
   memory_notes?: string | null;
   goal_id?: string | null;
+  project_id?: string | null;
   task_references?: string[] | null;
   due_date?: string | null;
   subtasks?: Subtask[];
@@ -52,7 +55,7 @@ const STATUSES: { value: Status; label: string; color: string }[] = [
 export function TaskDetailModal({ task, onClose, onUpdated, onStartPomodoro }: Props) {
   const { mutate: updateTask, isPending: isSaving } = useUpdateTask();
   const { mutate: deleteTask, isPending: isDeleting } = useDeleteTask();
-  const { addNotification } = useAppContext();
+  const { addNotification, language } = useAppContext();
 
   const [form, setForm] = useState({
     title: task.title,
@@ -62,6 +65,7 @@ export function TaskDetailModal({ task, onClose, onUpdated, onStartPomodoro }: P
     scheduled_time: task.scheduled_time || '',
     end_time: task.end_time || '',
     estimated_min: task.estimated_min || 30,
+    spent_min: task.spent_min || 0,
     pomodoro_type: (task.pomodoro_type || 'classic') as PomodoroType,
     memory_notes: task.memory_notes || '',
     goal_id: task.goal_id || '',
@@ -87,9 +91,35 @@ export function TaskDetailModal({ task, onClose, onUpdated, onStartPomodoro }: P
       priority: form.priority || 'medium',
       scheduled_time: form.scheduled_time || null,
       estimated_min: form.estimated_min,
+      spent_min: form.spent_min,
       due_date: form.due_date || null,
       subtasks: subtasks // Hook handles subtasks
     };
+
+    // Link/rollover task manual hours change to project total hours if task has a project_id
+    if (task.project_id && form.spent_min !== (task.spent_min || 0)) {
+      const diffMins = form.spent_min - (task.spent_min || 0);
+      supabase.auth.getUser().then(({ data: { user } }) => {
+        if (user) {
+          fetch(`/api/projects/${task.project_id}/sessions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-user-id': user.id
+            },
+            body: JSON.stringify({
+              title: language === 'ar' ? `تحديث يدوي لـ: ${form.title}` : `Manual update on: ${form.title}`,
+              description: language === 'ar' ? 'تعديل الوقت المنجز يدوياً من تفاصيل المهمة' : 'Manually edited spent minutes on task detail modal',
+              duration: diffMins,
+              tasksCompleted: form.status === 'done' ? [form.title] : [],
+              notes: `Manual log shift on: ${form.title}`,
+              mood: 'productive',
+              date: new Date().toISOString().split('T')[0]
+            })
+          }).catch(e => console.error("Error logging manual session difference:", e));
+        }
+      });
+    }
 
     updateTask(
       { id: task.id, data: dbData as any },
@@ -272,10 +302,10 @@ export function TaskDetailModal({ task, onClose, onUpdated, onStartPomodoro }: P
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
                     <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider block mb-1.5 flex items-center gap-1">
-                      <Calendar size={12} /> تاريخ الاستحقاق
+                      <Calendar size={12} /> {language === 'ar' ? 'تاريخ الاستحقاق' : 'Due Date'}
                     </label>
                     <input
                       type="date"
@@ -286,7 +316,7 @@ export function TaskDetailModal({ task, onClose, onUpdated, onStartPomodoro }: P
                   </div>
                   <div>
                     <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider block mb-1.5 flex items-center gap-1">
-                      <BarChart3 size={12} /> المدة (دقيقة)
+                      <BarChart3 size={12} /> {language === 'ar' ? 'المدة المقدرة (د)' : 'Estimated Mins'}
                     </label>
                     <input
                       type="number"
@@ -294,6 +324,18 @@ export function TaskDetailModal({ task, onClose, onUpdated, onStartPomodoro }: P
                       onChange={e => setForm(f => ({ ...f, estimated_min: Number(e.target.value) }))}
                       min={5} max={480} step={5}
                       className="w-full bg-secondary border border-border rounded-xl px-4 py-2.5 outline-none focus:border-primary transition-all text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider block mb-1.5 flex items-center gap-1 text-accent">
+                      <Timer size={12} className="text-accent-glow" /> {language === 'ar' ? 'الوقت المقضي (د)' : 'Spent Mins'}
+                    </label>
+                    <input
+                      type="number"
+                      value={form.spent_min}
+                      onChange={e => setForm(f => ({ ...f, spent_min: Number(e.target.value) }))}
+                      min={0} max={1440} step={5}
+                      className="w-full bg-secondary border border-accent/20 rounded-xl px-4 py-2.5 outline-none focus:border-accent transition-all text-sm font-bold text-accent"
                     />
                   </div>
                 </div>

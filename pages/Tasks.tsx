@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { useAppContext } from "../context/AppContext";
+import { playCastSpellSound } from "../lib/audio-magic";
 import {
   useGetTasks,
   useUpdateTask,
@@ -10,29 +11,6 @@ import {
 import { DragDropContext, Droppable } from "@hello-pangea/dnd";
 import { supabase } from "../lib/supabase";
 
-const getFormattedDate = (date: Date, lang: string) => {
-  if (lang === "ar") {
-    try {
-      const options: Intl.DateTimeFormatOptions = { day: "numeric", month: "long" };
-      return new Intl.DateTimeFormat("ar-EG", options).format(date);
-    } catch (e) {
-      console.error("Intl formatting support missing", e);
-    }
-  }
-  return format(date, "dd MMMM");
-};
-
-const getFormattedDayName = (date: Date, lang: string) => {
-  if (lang === "ar") {
-    try {
-      const options: Intl.DateTimeFormatOptions = { weekday: "long" };
-      return new Intl.DateTimeFormat("ar-EG", options).format(date);
-    } catch (e) {
-      console.error("Intl formatting support missing", e);
-    }
-  }
-  return format(date, "EEEE");
-};
 import {
   Play,
   Plus,
@@ -46,6 +24,8 @@ import {
   Circle,
   XCircle,
   Settings,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
@@ -59,6 +39,8 @@ import { FullScreenPomodoro } from "../components/FullScreenPomodoro";
 import { TaskItemCard } from "../components/TaskItemCard";
 import { TaskFormSheet } from "../components/TaskFormSheet";
 import { MiniFloatingPomodoro } from "../components/MiniFloatingPomodoro";
+import { TaskHeader } from "../components/tasks/TaskHeader";
+import { TaskCalendarView } from "../components/tasks/TaskCalendarView";
 
 const DroppableAny = Droppable as any;
 
@@ -68,6 +50,14 @@ export const Tasks = ({ currentUser }: any) => {
   const { mutate: updateTask } = useUpdateTask();
   const { mutate: completeTask } = useCompleteTask();
   const { mutate: createTask } = useCreateTask();
+
+  const [hideDraftColumn, setHideDraftColumn] = useState<boolean>(() => {
+    return localStorage.getItem("hideDraftColumn") === "true";
+  });
+
+  const [hideCancelledColumn, setHideCancelledColumn] = useState<boolean>(() => {
+    return localStorage.getItem("hideCancelledColumn") === "true";
+  });
 
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [tasks, setTasks] = useState<any[]>([]);
@@ -87,9 +77,16 @@ export const Tasks = ({ currentUser }: any) => {
   useEffect(() => {
     const fetchProjects = async () => {
       try {
-        const { data } = await supabase.from("projects").select("id, name");
-        if (data) {
-          setProjects(data);
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const { data } = await supabase
+            .from("projects")
+            .select("id, title")
+            .eq("user_id", user.id);
+          if (data) {
+            const mapped = data.map((p) => ({ id: p.id, name: p.title, title: p.title }));
+            setProjects(mapped);
+          }
         }
       } catch (err) {
         console.error("Error fetching projects in Tasks:", err);
@@ -126,6 +123,20 @@ export const Tasks = ({ currentUser }: any) => {
         return timeA.localeCompare(timeB);
       });
       setTasks(sorted);
+    }
+  }, [tasksData]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const editTaskId = params.get("edit");
+    if (editTaskId && tasksData && tasksData.length > 0) {
+      const taskToEdit = tasksData.find((t: any) => t.id === editTaskId);
+      if (taskToEdit) {
+        setEditingTask(taskToEdit);
+        // Clear the query parameter smoothly
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, '', newUrl);
+      }
     }
   }, [tasksData]);
 
@@ -204,6 +215,7 @@ export const Tasks = ({ currentUser }: any) => {
         { id: draggableId },
         {
           onSuccess: () => {
+            playCastSpellSound();
             addNotification(t("task_completed_xp"), "success");
             refetch(true);
           },
@@ -331,6 +343,34 @@ export const Tasks = ({ currentUser }: any) => {
     );
   };
 
+  const handleToggleSubtask = (taskId: string, subtaskId: string, completed: boolean) => {
+    const updatedTasks = tasks.map((t) => {
+      if (t.id === taskId) {
+        const updatedSubtasks = (t.subtasks || []).map((st: any) =>
+          st.id === subtaskId ? { ...st, completed } : st
+        );
+        return { ...t, subtasks: updatedSubtasks };
+      }
+      return t;
+    });
+    setTasks(updatedTasks);
+
+    const targetTask = tasks.find((t) => t.id === taskId);
+    if (targetTask) {
+      const updatedSubtasks = (targetTask.subtasks || []).map((st: any) =>
+        st.id === subtaskId ? { ...st, completed } : st
+      );
+      updateTask(
+        { id: taskId, data: { subtasks: updatedSubtasks } },
+        {
+          onSuccess: () => {
+            refetch(true);
+          }
+        }
+      );
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-[400px] flex items-center justify-center">
@@ -341,143 +381,53 @@ export const Tasks = ({ currentUser }: any) => {
 
   return (
     <div className="h-[calc(100vh-120px)] flex flex-col space-y-4 lg:space-y-8 animate-in fade-in duration-500 overflow-hidden px-2 lg:px-0">
-      <header className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 lg:gap-6 pb-2">
-        <div className="flex items-center gap-6 flex-1">
-          <div className="hidden md:block">
-            <h1 className="text-3xl font-display font-bold text-text-primary tracking-tight">
-              {t("tasks")}
-            </h1>
-            <p className="text-text-secondary text-xs font-bold uppercase tracking-widest opacity-60">
-              Flow Console
-            </p>
-          </div>
-
-          <div className="flex flex-col md:flex-row items-center justify-center gap-3 md:gap-8 flex-1 lg:max-w-xl">
-            <div className="flex items-center gap-6">
-              <button
-                onClick={() => setSelectedDate(addDays(selectedDate, -1))}
-                className="p-3 bg-bg-secondary border border-border text-text-secondary hover:text-accent hover:border-accent rounded-2xl transition-all shadow-sm active:scale-90 cursor-pointer"
-              >
-                <ChevronRight className="w-5 h-5 rotate-180" />
-              </button>
-
-              <div className="flex flex-col items-center min-w-[140px] relative cursor-pointer group">
-                <input
-                  type="date"
-                  value={format(selectedDate, "yyyy-MM-dd")}
-                  onChange={(e) => {
-                    if (e.target.value) {
-                      const parts = e.target.value.split("-");
-                      const picked = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-                      setSelectedDate(picked);
-                    }
-                  }}
-                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-20"
-                />
-                <h3 className="text-xl font-bold text-text-primary group-hover:text-accent transition-colors">
-                  {isSameDay(selectedDate, new Date())
-                    ? (language === "ar" ? "اليوم" : t("today"))
-                    : getFormattedDate(selectedDate, language)}
-                </h3>
-                <span className="text-[10px] uppercase font-bold tracking-[0.2em] text-accent opacity-80 mt-1 group-hover:underline">
-                  {getFormattedDayName(selectedDate, language)} 📅
-                </span>
-              </div>
-
-              <button
-                onClick={() => setSelectedDate(addDays(selectedDate, 1))}
-                className="p-3 bg-bg-secondary border border-border text-text-secondary hover:text-accent hover:border-accent rounded-2xl transition-all shadow-sm active:scale-90 cursor-pointer"
-              >
-                <ChevronRight className="w-5 h-5" />
-              </button>
-            </div>
-
-            {!isSameDay(selectedDate, new Date()) && (
-              <button
-                onClick={() => {
-                  setSelectedDate(new Date());
-                }}
-                className="text-xs font-bold text-accent bg-accent/10 border border-accent/20 px-3 py-1.5 rounded-xl hover:bg-accent/20 transition-all shrink-0 cursor-pointer"
-              >
-                {language === "ar" ? "العودة لليوم ↩" : "Back to Today"}
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => setIsFocusMode(!isFocusMode)}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border ${
-              isFocusMode
-                ? "bg-orange-500/10 border-orange-500 text-orange-500"
-                : "bg-bg-secondary border-border text-text-secondary hover:text-text-primary"
-            }`}
-          >
-            <Zap className={`w-4 h-4 ${isFocusMode ? "fill-current" : ""}`} />
-            Focus Mode
-          </button>
-
-          <div className="flex items-center gap-1 bg-bg-secondary p-1 rounded-xl border border-border">
-            <button
-              onClick={() => setView("kanban")}
-              className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
-                view === "kanban"
-                  ? "bg-accent text-white shadow-lg shadow-accent/20"
-                  : "text-text-secondary hover:text-text-primary"
-              }`}
-            >
-              <Settings className="w-3.5 h-3.5" />
-              Board
-            </button>
-            <button
-              onClick={() => setView("calendar")}
-              className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
-                view === "calendar"
-                  ? "bg-accent text-white shadow-lg shadow-accent/20"
-                  : "text-text-secondary hover:text-text-primary"
-              }`}
-            >
-              <Calendar className="w-3.5 h-3.5" />
-              Calendar
-            </button>
-          </div>
-
-          <button
-            onClick={() => {
-              setEditingTask(null);
-              setIsAdding(true);
-            }}
-            className="bg-accent text-accent-foreground px-6 py-2.5 rounded-xl font-bold text-sm shadow-xl shadow-accent/20 hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
-          >
-            <Plus className="w-5 h-5" />
-            New Task
-          </button>
-        </div>
-      </header>
+      <TaskHeader
+        t={t}
+        language={language}
+        selectedDate={selectedDate}
+        setSelectedDate={setSelectedDate}
+        isFocusMode={isFocusMode}
+        setIsFocusMode={setIsFocusMode}
+        view={view}
+        setView={setView}
+        onNewTask={() => {
+          setEditingTask(null);
+          setIsAdding(true);
+        }}
+      />
 
       {view === "kanban" ? (
         <DragDropContext onDragEnd={onDragEnd}>
-          <div className="flex-1 flex overflow-x-auto gap-8 min-h-0 pb-4 no-scrollbar scroll-smooth snap-x">
+          <div className="flex-1 flex overflow-x-auto gap-3.5 min-h-0 pb-4 no-scrollbar scroll-smooth snap-x px-1">
             {columns.map((column) => {
               const columnTasks = filteredTasks.filter((t) => {
                 const cleanDue = t.due_date ? String(t.due_date).trim().slice(0, 10) : null;
                 const isOverdue = cleanDue && cleanDue < format(selectedDate, "yyyy-MM-dd") && t.status !== "done" && t.status !== "cancelled";
-                const hasNoDueDate = !cleanDue && t.status !== "done" && t.status !== "cancelled";
 
                 if (column.id === "draft") {
-                  return t.status === "draft" || isOverdue || hasNoDueDate;
+                  return t.status === "draft" || (t.status === "todo" && isOverdue);
                 }
 
-                return t.status === column.id && !isOverdue && !hasNoDueDate;
+                // If a task is a todo and overdue, it has already been relegated to the 'draft' column above.
+                if (t.status === "todo" && isOverdue) {
+                  return false;
+                }
+
+                return t.status === column.id;
               });
               const isDoing = column.id === "in_progress";
               const isFaded = isFocusMode && !isDoing;
 
+              const isDraft = column.id === "draft";
+              const isCancelledCol = column.id === "cancelled";
+              const isCollapsed = (isDraft && hideDraftColumn) || (isCancelledCol && hideCancelledColumn);
+
               return (
                 <div
                   key={column.id}
-                  className={`flex flex-col flex-shrink-0 w-full md:w-[340px] md:snap-center space-y-5 h-full min-h-0 p-4 rounded-3xl transition-opacity duration-500 ${
+                  className={`flex flex-col transition-all duration-300 ${
+                    isCollapsed ? "flex-shrink-0 w-full md:w-[48px] px-1" : "md:flex-1 md:min-w-[280px]"
+                  } md:snap-center space-y-4.5 h-full min-h-0 p-3 rounded-[2rem] transition-opacity duration-500 ${
                     column.bg
                   } ${
                     isFaded
@@ -485,33 +435,81 @@ export const Tasks = ({ currentUser }: any) => {
                       : "opacity-100"
                   }`}
                 >
-                  <div className="flex items-center justify-between px-3">
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm ${
-                          isDoing
-                            ? "bg-orange-500 text-white animate-pulse"
-                            : "bg-bg-secondary text-text-secondary"
-                        }`}
-                      >
+                  {isCollapsed ? (
+                    <div className="flex flex-col items-center gap-6 py-5">
+                      <div className="w-8 h-8 rounded-xl flex items-center justify-center text-sm bg-bg-secondary text-text-secondary shadow-sm">
                         {column.icon}
                       </div>
-                      <h2
-                        className={`text-sm font-bold uppercase tracking-widest ${
-                          isDoing ? "text-orange-500" : "text-text-secondary"
-                        }`}
+                      <span className="text-[10px] font-black text-text-secondary bg-bg-secondary/80 w-6 h-6 flex items-center justify-center rounded-lg border border-border/50">
+                        {columnTasks.length}
+                      </span>
+                      <button
+                        onClick={() => {
+                          if (isDraft) {
+                            setHideDraftColumn(false);
+                            localStorage.setItem("hideDraftColumn", "false");
+                          } else {
+                            setHideCancelledColumn(false);
+                            localStorage.setItem("hideCancelledColumn", "false");
+                          }
+                        }}
+                        className="p-1.5 text-text-secondary hover:text-accent hover:bg-accent/15 rounded-xl transition-all cursor-pointer"
+                        title={language === 'ar' ? 'عرض العمود' : 'Show Column'}
                       >
-                        {column.title === "DOING"
-                          ? "Active Focus"
-                          : column.title}
-                      </h2>
+                        <Eye className="w-4 h-4" />
+                      </button>
                     </div>
-                    <span className="text-xs font-bold text-text-secondary bg-bg-secondary/80 px-2.5 py-1 rounded-lg border border-border/50">
-                      {columnTasks.length}
-                    </span>
-                  </div>
+                  ) : (
+                    <div className="flex items-center justify-between px-3">
+                      <div className="flex items-center gap-2">
+                        <div
+                          className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm ${
+                            isDoing
+                              ? "bg-orange-500 text-white animate-pulse"
+                              : "bg-bg-secondary text-text-secondary"
+                          }`}
+                        >
+                          {column.icon}
+                        </div>
+                        <h2
+                          className={`text-xs md:text-sm font-bold uppercase tracking-widest ${
+                            isDoing ? "text-orange-500" : "text-text-secondary"
+                          }`}
+                        >
+                          {column.title === "DOING"
+                            ? "Active Focus"
+                            : column.title === "Pending from yesterday" && language === "ar"
+                            ? "معلقة من أمس"
+                            : column.title === "🚫 CANCELLED" && language === "ar"
+                            ? "ملغية 🚫"
+                            : column.title}
+                        </h2>
+                        {(isDraft || isCancelledCol) && (
+                          <button
+                            onClick={() => {
+                              if (isDraft) {
+                                setHideDraftColumn(true);
+                                localStorage.setItem("hideDraftColumn", "true");
+                              } else {
+                                setHideCancelledColumn(true);
+                                localStorage.setItem("hideCancelledColumn", "true");
+                              }
+                            }}
+                            className="p-1 text-text-secondary hover:text-accent transition-all cursor-pointer"
+                            title={language === 'ar' ? 'إخفاء العمود' : 'Hide Column'}
+                          >
+                            <EyeOff className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      <span className="text-xs font-bold text-text-secondary bg-bg-secondary/80 px-2.5 py-1 rounded-lg border border-border/50">
+                        {columnTasks.length}
+                      </span>
+                    </div>
+                  )}
 
-                  <DroppableAny droppableId={column.id}>
+                  {!isCollapsed && (
+                    <DroppableAny droppableId={column.id} ignoreContainerClipping>
                     {(provided: any) => (
                       <div
                         {...provided.droppableProps}
@@ -529,6 +527,7 @@ export const Tasks = ({ currentUser }: any) => {
                               setIsAdding(false);
                             }}
                             onStatusChange={handleStatusChange}
+                            onToggleSubtask={handleToggleSubtask}
                             onStartPomodoro={(t) => {
                               startPomodoroGlobal(t);
                             }}
@@ -620,96 +619,19 @@ export const Tasks = ({ currentUser }: any) => {
                       </div>
                     )}
                   </DroppableAny>
+                  )}
                 </div>
               );
             })}
           </div>
         </DragDropContext>
       ) : (
-        <div className="flex-1 bg-bg-secondary/30 rounded-[3rem] border border-border overflow-hidden flex flex-col">
-          <div className="grid grid-cols-7 border-b border-border bg-bg-primary/50 backdrop-blur-md">
-            {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
-              <div
-                key={day}
-                className="py-4 text-center text-[10px] font-bold uppercase tracking-widest text-text-secondary border-r border-border last:border-r-0"
-              >
-                {day}
-              </div>
-            ))}
-          </div>
-          <div className="flex-1 overflow-y-auto no-scrollbar grid grid-cols-7">
-            {(() => {
-              const start = startOfWeek(selectedDate, { weekStartsOn: 1 });
-              const calendarDates = [];
-              for (let i = 0; i < 35; i++) {
-                calendarDates.push(addDays(start, i));
-              }
-              return calendarDates.map((date, idx) => {
-                const targetStr = format(date, "yyyy-MM-dd");
-                const dayTasks = tasks.filter((t) => {
-                  const cleanDue = t.due_date ? String(t.due_date).trim().slice(0, 10) : null;
-                  const cleanSched = t.daily_schedule ? String(t.daily_schedule).trim().slice(0, 10) : null;
-                  return cleanDue === targetStr || cleanSched === targetStr;
-                });
-                const isCurrentMonth =
-                  date.getMonth() === selectedDate.getMonth();
-                const isToday = isSameDay(date, new Date());
-
-                return (
-                  <div
-                    key={idx}
-                    onClick={() => setSelectedDate(date)}
-                    className={`min-h-[120px] p-2 border-r border-b border-border last:border-r-0 flex flex-col gap-1 transition-all cursor-pointer hover:bg-bg-primary/40 ${
-                      !isCurrentMonth ? "opacity-20 grayscale" : ""
-                    }`}
-                  >
-                    <div className="flex items-center justify-between px-1 mb-1">
-                      <span
-                        className={`text-xs font-bold ${
-                          isToday
-                            ? "w-6 h-6 rounded-lg bg-accent text-white flex items-center justify-center shadow-lg shadow-accent/20 scale-105"
-                            : "text-text-secondary"
-                        }`}
-                      >
-                        {format(date, "d")}
-                      </span>
-                      {dayTasks.length > 0 && (
-                        <div className="w-1.5 h-1.5 rounded-full bg-accent" />
-                      )}
-                    </div>
-                    <div className="flex-1 space-y-1 overflow-y-auto no-scrollbar">
-                      {dayTasks.slice(0, 4).map((task) => (
-                        <div
-                          key={task.id}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingTask(task);
-                          }}
-                          className={`px-2 py-1 rounded-lg text-[9px] font-bold truncate transition-all ${
-                            task.status === "done"
-                              ? "bg-emerald-500/10 text-emerald-500 line-through"
-                              : task.status === "in_progress"
-                              ? "bg-orange-500/10 text-orange-500 ring-1 ring-orange-500"
-                              : task.status === "cancelled"
-                              ? "bg-red-500/10 text-red-500"
-                              : "bg-accent/10 text-accent ring-1 ring-accent/20"
-                          }`}
-                        >
-                          {task.title}
-                        </div>
-                      ))}
-                      {dayTasks.length > 4 && (
-                        <div className="text-[8px] font-bold text-text-secondary px-2">
-                          + {dayTasks.length - 4} more
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              });
-            })()}
-          </div>
-        </div>
+        <TaskCalendarView
+          selectedDate={selectedDate}
+          setSelectedDate={setSelectedDate}
+          tasks={tasks}
+          setEditingTask={setEditingTask}
+        />
       )}
 
       {/* Mini Floating Pomodoro */}

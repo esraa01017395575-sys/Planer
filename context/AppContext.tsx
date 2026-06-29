@@ -40,12 +40,17 @@ interface AppContextType {
   isPomodoroMinimized: boolean;
   setIsPomodoroMinimized: (minimized: boolean) => void;
   startPomodoroGlobal: (task: any) => void;
+  showPomodoroEncouragement: boolean;
+  setShowPomodoroEncouragement: (show: boolean) => void;
   taskRemindersEnabled: boolean;
   setTaskRemindersEnabled: (enabled: boolean) => void;
   habitRemindersEnabled: boolean;
   setHabitRemindersEnabled: (enabled: boolean) => void;
   aiSuggestionsEnabled: boolean;
   setAiSuggestionsEnabled: (enabled: boolean) => void;
+  pomodoroMode: 'countdown' | 'stopwatch';
+  setPomodoroMode: (mode: 'countdown' | 'stopwatch') => void;
+  handleSaveStopwatchSession: (customDurationMins?: number) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -65,7 +70,8 @@ const translations: Record<Language, Record<string, string>> = {
     good_morning: 'Good morning',
     good_afternoon: 'Good afternoon',
     good_evening: 'Good evening',
-    daily_quote: 'AI DAILY QUOTE',
+    good_night: 'Good night',
+    daily_quote: 'Quote',
     pending_yesterday: 'PENDING FROM YESTERDAY',
     today_tasks: "TODAY'S TASKS",
     habits_today: 'HABITS TODAY',
@@ -184,7 +190,8 @@ const translations: Record<Language, Record<string, string>> = {
     good_morning: 'صباح الخير',
     good_afternoon: 'مساء الخير',
     good_evening: 'مساء الخير',
-    daily_quote: 'حكمة اليوم الذكية',
+    good_night: 'طابت ليلتك',
+    daily_quote: 'اقتباس اليوم',
     pending_yesterday: 'مهام معلقة من الأمس',
     today_tasks: 'مهام اليوم',
     habits_today: 'عادات اليوم',
@@ -304,6 +311,7 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   // Pomodoro Global State
   const [activePomodoro, setActivePomodoro] = useState<any | null>(null);
+  const [pomodoroMode, setPomodoroMode] = useState<'countdown' | 'stopwatch'>('countdown');
   const [pomodoroTime, setPomodoroTime] = useState(25 * 60);
   const [initialPomodoroTime, setInitialPomodoroTime] = useState(25 * 60);
   const [isPomodoroRunning, setIsPomodoroRunning] = useState(false);
@@ -311,25 +319,27 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [pomodoroCount, setPomodoroCount] = useState(0);
   const [soundMuted, setSoundMuted] = useState<boolean>(() => localStorage.getItem('soundMuted') === 'true');
   const [isPomodoroMinimized, setIsPomodoroMinimized] = useState(false);
+  const [showPomodoroEncouragement, setShowPomodoroEncouragement] = useState(false);
 
   // Audio Synthesizer Helpers for Retro ticking and chime
-  const playTickSound = () => {
+  const playTickSound = (secsRemaining?: number) => {
     if (soundMuted) return;
     try {
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const osc = audioCtx.createOscillator();
       const gainNode = audioCtx.createGain();
       
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(450, audioCtx.currentTime); // Crisper watch clock ticking frequency
-      gainNode.gain.setValueAtTime(0.025, audioCtx.currentTime); // Audible but highly comfortable click volume
-      gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.03);
+      const isTick = (secsRemaining ?? 0) % 2 === 0;
+      osc.type = 'triangle'; // Woodier/warmer analog tick-tock
+      osc.frequency.setValueAtTime(isTick ? 600 : 450, audioCtx.currentTime); 
+      gainNode.gain.setValueAtTime(0.012, audioCtx.currentTime); 
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.05);
       
       osc.connect(gainNode);
       gainNode.connect(audioCtx.destination);
       
       osc.start();
-      osc.stop(audioCtx.currentTime + 0.04);
+      osc.stop(audioCtx.currentTime + 0.06);
     } catch (e) {
       // Audio context permission or fallback error ignored
     }
@@ -368,6 +378,7 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     if (pomodoroPhase === 'focus') {
       const newCount = pomodoroCount + 1;
       setPomodoroCount(newCount);
+      setShowPomodoroEncouragement(true);
 
       // Record Pomodoro Session inside DB (Support dual density compatibility query)
       try {
@@ -382,6 +393,43 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             completed: true,
             completed_at: new Date().toISOString()
           });
+
+          // UPDATE TASK SPENT MINUTES DIRECTLY (Safely)
+          try {
+            const { data: currentTask } = await supabase
+              .from('tasks')
+              .select('spent_min')
+              .eq('id', activePomodoro.id)
+              .maybeSingle();
+            
+            const currentSpent = currentTask?.spent_min || 0;
+            await supabase
+              .from('tasks')
+              .update({ spent_min: currentSpent + durationMins })
+              .eq('id', activePomodoro.id);
+          } catch (taskErr) {
+            console.error("Error updating task spent_min:", taskErr);
+          }
+
+          // NEW: Link/rollover task hours to project total hours if task has a project_id
+          if (activePomodoro.project_id) {
+            await fetch(`/api/projects/${activePomodoro.project_id}/sessions`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-user-id': user.id
+              },
+              body: JSON.stringify({
+                title: language === 'ar' ? `جلسة تركيز بومودورو: ${activePomodoro.title}` : `Pomodoro Session: ${activePomodoro.title}`,
+                description: language === 'ar' ? 'تم إكمال جلسة تركيز كاملة بنجاح' : 'Completed focus session successfully',
+                duration: durationMins,
+                tasksCompleted: [activePomodoro.title],
+                notes: `Pomodoro session logged on task: ${activePomodoro.title}`,
+                mood: 'productive',
+                date: new Date().toISOString().split('T')[0]
+              })
+            });
+          }
         }
       } catch (err) {
         console.error("Error saving global pomodoro session:", err);
@@ -404,7 +452,8 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
     } else {
       setPomodoroPhase('focus');
-      const focusSecs = (activePomodoro?.estimated_min || 25) * 60;
+      const preferredLength = localStorage.getItem('pomodoroSessionLength') === '50' ? 50 : 25;
+      const focusSecs = preferredLength * 60;
       setPomodoroTime(focusSecs);
       setInitialPomodoroTime(focusSecs);
       addNotification(language === 'ar' ? 'انتهت الاستراحة! هيا لنركز مجدداً 💪' : 'Break is over! Clear your mind and let\'s focus 💪', 'info');
@@ -418,12 +467,86 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   };
 
+  // Stopwatch completion & saving session linked to project total spent hours
+  const handleSaveStopwatchSession = async (customDurationMins?: number) => {
+    setIsPomodoroRunning(false);
+    playBeepSound();
+
+    const actualSeconds = pomodoroTime;
+    const durationMins = customDurationMins ?? Math.max(1, Math.round(actualSeconds / 60));
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && activePomodoro) {
+        // 1. Record Pomodoro session row linked to task
+        await supabase.from('pomodoro_sessions').insert({
+          user_id: user.id,
+          task_id: activePomodoro.id,
+          duration_minutes: durationMins,
+          duration_min: durationMins,
+          completed: true,
+          completed_at: new Date().toISOString()
+        });
+
+        // UPDATE TASK SPENT MINUTES DIRECTLY (Safely)
+        try {
+          const { data: currentTask } = await supabase
+            .from('tasks')
+            .select('spent_min')
+            .eq('id', activePomodoro.id)
+            .maybeSingle();
+          
+          const currentSpent = currentTask?.spent_min || 0;
+          await supabase
+            .from('tasks')
+            .update({ spent_min: currentSpent + durationMins })
+            .eq('id', activePomodoro.id);
+        } catch (taskErr) {
+          console.error("Error updating task spent_min:", taskErr);
+        }
+
+        // 2. Record workspace session linked to parent project for total spent hours tracking
+        if (activePomodoro.project_id) {
+          await fetch(`/api/projects/${activePomodoro.project_id}/sessions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-user-id': user.id
+            },
+            body: JSON.stringify({
+              title: language === 'ar' ? `ساعة توقيت: ${activePomodoro.title}` : `Stopwatch Timer: ${activePomodoro.title}`,
+              description: language === 'ar' ? `جلسة عمل تتبع مستمرة مكتملة` : `Stopwatch focus tracking completed`,
+              duration: durationMins,
+              tasksCompleted: [activePomodoro.title],
+              notes: `Stopwatch focus session logged on task: ${activePomodoro.title}`,
+              mood: 'productive',
+              date: new Date().toISOString().split('T')[0]
+            })
+          });
+        }
+
+        // Show encouragement
+        setShowPomodoroEncouragement(true);
+        addNotification(language === 'ar' ? 'تم حفظ تقدم الجلسة وتحديث ساعات المشروع بنجاح!' : 'Focus session saved! Project total spent hours updated.', 'success');
+      }
+    } catch (e) {
+      console.error("Error saving stopwatch session:", e);
+    }
+  };
+
   // Global ticker effect
   useEffect(() => {
     let interval: any;
     if (isPomodoroRunning) {
       interval = setInterval(() => {
         setPomodoroTime(prev => {
+          if (pomodoroMode === 'stopwatch') {
+            if (pomodoroPhase === 'focus') {
+              playTickSound(prev);
+            }
+            return prev + 1;
+          }
+
           if (prev <= 1) {
             clearInterval(interval);
             setTimeout(() => {
@@ -432,14 +555,14 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             return 0;
           }
           if (pomodoroPhase === 'focus') {
-            playTickSound();
+            playTickSound(prev);
           }
           return prev - 1;
         });
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [isPomodoroRunning, pomodoroPhase, soundMuted, activePomodoro]);
+  }, [isPomodoroRunning, pomodoroPhase, soundMuted, activePomodoro, pomodoroMode]);
 
   // Global Start Action
   const startPomodoroGlobal = async (task: any) => {
@@ -462,15 +585,24 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
 
     // 2. Set timer constants
-    const targetMins = task.estimated_min || task.duration || 25;
+    const preferredLength = localStorage.getItem('pomodoroSessionLength') === '50' ? 50 : 25;
     setActivePomodoro(task);
-    setInitialPomodoroTime(targetMins * 60);
-    setPomodoroTime(targetMins * 60);
+    if (pomodoroMode === 'stopwatch') {
+      setInitialPomodoroTime(0);
+      setPomodoroTime(0);
+    } else {
+      setInitialPomodoroTime(preferredLength * 60);
+      setPomodoroTime(preferredLength * 60);
+    }
     setIsPomodoroRunning(true);
     setPomodoroPhase('focus');
     setIsPomodoroMinimized(false);
 
-    addNotification(language === 'ar' ? 'بدأت جلسة بومودورو! تم تحويل المهمة إلى قيد التنفيذ' : 'Pomodoro session started! Task moved to Active Focus', 'success');
+    if (pomodoroMode === 'stopwatch') {
+      addNotification(language === 'ar' ? 'بدأ احتساب وقت المذاكرة/العمل ساعة توقيت!' : 'Stopwatch started on active focus!', 'success');
+    } else {
+      addNotification(language === 'ar' ? 'بدأت جلسة بومودورو! تم تحويل المهمة إلى قيد التنفيذ' : 'Pomodoro session started! Task moved to Active Focus', 'success');
+    }
 
     // 3. Directly redirect to /pomodoro/taskid page
     window.history.pushState(null, '', `/pomodoro/${task.id}`);
@@ -480,6 +612,52 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const addNotification = (message: string, type: 'success' | 'error' | 'info') => {
     const id = Math.random().toString(36).substring(7);
     setNotifications(prev => [...prev, { id, message, type }]);
+
+    // Play notification sound if sound is not muted
+    if (!soundMuted) {
+      try {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtx) {
+          const audioCtx = new AudioCtx();
+          const now = audioCtx.currentTime;
+
+          if (type === 'error') {
+            // A quick caution double beep
+            [350, 280].forEach((freq, idx) => {
+              const osc = audioCtx.createOscillator();
+              const gainNode = audioCtx.createGain();
+              osc.type = 'triangle';
+              osc.frequency.setValueAtTime(freq, now + idx * 0.12);
+              gainNode.gain.setValueAtTime(0.06, now + idx * 0.12);
+              gainNode.gain.exponentialRampToValueAtTime(0.0001, now + idx * 0.12 + 0.2);
+              osc.connect(gainNode);
+              gainNode.connect(audioCtx.destination);
+              osc.start(now + idx * 0.12);
+              osc.stop(now + idx * 0.12 + 0.25);
+            });
+          } else {
+            // A beautiful sparkling ascending bell-like chime (A5 -> C#6 -> E6 -> A6)
+            const notes = [880, 1109.73, 1318.51, 1760];
+            notes.forEach((freq, idx) => {
+              const osc = audioCtx.createOscillator();
+              const gainNode = audioCtx.createGain();
+              osc.type = 'sine';
+              osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+              gainNode.gain.setValueAtTime(0.001, now + idx * 0.08);
+              gainNode.gain.linearRampToValueAtTime(0.05, now + idx * 0.08 + 0.02);
+              gainNode.gain.exponentialRampToValueAtTime(0.0001, now + idx * 0.08 + 0.4);
+              osc.connect(gainNode);
+              gainNode.connect(audioCtx.destination);
+              osc.start(now + idx * 0.08);
+              osc.stop(now + idx * 0.08 + 0.45);
+            });
+          }
+        }
+      } catch (e) {
+        console.error("Failed to play notification sound:", e);
+      }
+    }
+
     setTimeout(() => {
       setNotifications(prev => prev.filter(n => n.id !== id));
     }, 5000);
@@ -526,7 +704,13 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (!session?.user) return;
         const userId = session.user.id;
         const now = new Date();
-        const todayKey = now.toISOString().slice(0, 10);
+        
+        // Get user's local YYYY-MM-DD date key instead of UTC to avoid timezone mismatch
+        const todayKey = [
+          now.getFullYear(),
+          String(now.getMonth() + 1).padStart(2, '0'),
+          String(now.getDate()).padStart(2, '0')
+        ].join('-');
 
         // --- 1. TASK REMINDERS (30 MINUTES BEFORE TIME) ---
         const taskReminders = localStorage.getItem('taskRemindersEnabled') !== 'false';
@@ -549,10 +733,10 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               scheduledDateTime.setHours(parsedTime.hours, parsedTime.minutes, 0, 0);
 
               const timeDiffMs = scheduledDateTime.getTime() - now.getTime();
-              // check if starting in around 30 mins (25 to 33 minutes)
-              const isAround30MinsBefore = timeDiffMs > 25 * 60_000 && timeDiffMs <= 33 * 60_000;
+              // check if starting within the next 30 minutes, or up to 5 minutes past (to handle browser background throttling)
+              const isWithin30MinsBefore = timeDiffMs > -5 * 60_000 && timeDiffMs <= 30 * 60_000;
 
-              if (isAround30MinsBefore) {
+              if (isWithin30MinsBefore) {
                 const uniqueKey = `task-${task.id}-30m-reminded`;
                 if (!firedNotifications.current.has(uniqueKey)) {
                   firedNotifications.current.add(uniqueKey);
@@ -613,7 +797,7 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
                 if (!firedNotifications.current.has(uniqueKey)) {
                   const diff = now.getTime() - fireAt.getTime();
-                  if (diff >= 0 && diff < 120_000) {
+                  if (diff >= 0 && diff < 10 * 60_000) {
                     firedNotifications.current.add(uniqueKey);
 
                     const bodyAr = mins === 0 ? "حان وقت هذه العادة الآن! 🌟" : `تبدأ هذه العادة خلال ${mins} دقيقة! ⏰`;
@@ -713,9 +897,12 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       soundMuted, setSoundMuted: handleSetSoundMuted,
       isPomodoroMinimized, setIsPomodoroMinimized,
       startPomodoroGlobal,
+      showPomodoroEncouragement, setShowPomodoroEncouragement,
       taskRemindersEnabled, setTaskRemindersEnabled: handleSetTaskReminders,
       habitRemindersEnabled, setHabitRemindersEnabled: handleSetHabitReminders,
-      aiSuggestionsEnabled, setAiSuggestionsEnabled: handleSetAiSuggestions
+      aiSuggestionsEnabled, setAiSuggestionsEnabled: handleSetAiSuggestions,
+      pomodoroMode, setPomodoroMode,
+      handleSaveStopwatchSession
     }}>
       {children}
       
@@ -724,18 +911,14 @@ export const AppContextProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         {notifications.map(n => (
           <div 
             key={n.id}
-            className={`pointer-events-auto px-6 py-4 rounded-2xl shadow-2xl border flex items-center gap-3 animate-in slide-in-from-right-4 fade-in duration-300 opacity-80 ${
-              n.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' :
-              n.type === 'error' ? 'bg-red-500/10 border-red-500/20 text-red-500' :
-              'bg-accent/10 border-accent/20 text-accent'
+            className={`pointer-events-auto px-5 py-3.5 rounded-2xl shadow-2xl border flex items-center gap-3 animate-in slide-in-from-right-4 fade-in duration-300 opacity-100 ${
+              n.type === 'success' ? 'bg-emerald-600 text-white border-emerald-500' :
+              n.type === 'error' ? 'bg-red-600 text-white border-red-500' :
+              'bg-accent text-white border-accent-glow'
             }`}
           >
-            <div className={`w-2 h-2 rounded-full ${
-              n.type === 'success' ? 'bg-emerald-500' :
-              n.type === 'error' ? 'bg-red-500' :
-              'bg-accent'
-            }`} />
-            <span className="font-bold text-sm">{n.message}</span>
+            <div className={`w-2.5 h-2.5 rounded-full bg-white`} />
+            <span className="font-bold text-sm tracking-wide">{n.message}</span>
           </div>
         ))}
       </div>

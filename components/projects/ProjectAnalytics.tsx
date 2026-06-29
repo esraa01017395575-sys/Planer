@@ -2,12 +2,18 @@ import React, { useEffect, useState } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { BrainCircuit, ThumbsUp, Frown, Sparkles, Clock, CalendarDays, Loader2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { useAppContext } from '../../context/AppContext';
 
 interface AnalyticsReport {
   totalMinutes: number;
   avgSessionDuration: number;
   moodDistribution: Record<string, number>;
   recentVelocity: Array<{ date: string; duration: number; tasksCount: number }>;
+  totalTasksCount?: number;
+  completedTasksCount?: number;
+  pendingTasksCount?: number;
+  tasksTotalMinutes?: number;
+  tasksList?: Array<{ id: string; title: string; status: string; spent_min: number }>;
 }
 
 interface ProjectAnalyticsProps {
@@ -15,6 +21,8 @@ interface ProjectAnalyticsProps {
 }
 
 export const ProjectAnalytics: React.FC<ProjectAnalyticsProps> = ({ projectId }) => {
+  const { language } = useAppContext();
+  const isAr = language === 'ar';
   const [data, setData] = useState<AnalyticsReport | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -47,7 +55,9 @@ export const ProjectAnalytics: React.FC<ProjectAnalyticsProps> = ({ projectId })
     return (
       <div className="flex flex-col items-center justify-center p-12 py-16 gap-3">
         <Loader2 className="w-8 h-8 text-accent animate-spin" />
-        <span className="text-xs text-text-secondary">جاري جمع تحليلات الإنتاجية...</span>
+        <span className="text-xs text-text-secondary">
+          {isAr ? "جاري جمع تحليلات الإنتاجية..." : "Gathering productivity analytics..."}
+        </span>
       </div>
     );
   }
@@ -56,8 +66,12 @@ export const ProjectAnalytics: React.FC<ProjectAnalyticsProps> = ({ projectId })
     return (
       <div className="bg-bg-secondary/30 rounded-2xl border border-border/10 p-8 text-center">
         <BrainCircuit className="w-8 h-8 text-text-secondary mx-auto mb-2 opacity-30" />
-        <p className="text-sm font-medium text-text-secondary">لا توجد تحليلات كافية بعد.</p>
-        <p className="text-xs text-text-secondary/60 mt-1">ابدأ بتسجيل أول جلسة عمل لرسم بياني لإنتاجيتك!</p>
+        <p className="text-sm font-medium text-text-secondary">
+          {isAr ? "لا توجد تحليلات كافية بعد." : "Not enough analytics yet."}
+        </p>
+        <p className="text-xs text-text-secondary/60 mt-1">
+          {isAr ? "ابدأ بتسجيل أول جلسة عمل لرسم بياني لإنتاجيتك!" : "Start by logging your first work session to graph your productivity!"}
+        </p>
       </div>
     );
   }
@@ -82,8 +96,12 @@ export const ProjectAnalytics: React.FC<ProjectAnalyticsProps> = ({ projectId })
             <Clock className="w-5 h-5" />
           </div>
           <div>
-            <p className="text-[10px] text-text-secondary uppercase tracking-widest font-mono">مجموع الساعات / Total Hours</p>
-            <p className="text-lg font-bold text-text-primary mt-0.5">{totalHours} ساعة</p>
+            <p className="text-[10px] text-text-secondary uppercase tracking-widest font-mono">
+              {isAr ? "مجموع الساعات" : "Total Time"}
+            </p>
+            <p className="text-lg font-bold text-text-primary mt-0.5">
+              {totalHours} {isAr ? "ساعة" : "hours"}
+            </p>
           </div>
         </div>
 
@@ -92,15 +110,21 @@ export const ProjectAnalytics: React.FC<ProjectAnalyticsProps> = ({ projectId })
             <CalendarDays className="w-5 h-5" />
           </div>
           <div>
-            <p className="text-[10px] text-text-secondary uppercase tracking-widest font-mono">معدل الجلسة / Avg Duration</p>
-            <p className="text-lg font-bold text-text-primary mt-0.5">{data.avgSessionDuration} دقيقة</p>
+            <p className="text-[10px] text-text-secondary uppercase tracking-widest font-mono">
+              {isAr ? "معدل الجلسة" : "Avg Duration"}
+            </p>
+            <p className="text-lg font-bold text-text-primary mt-0.5">
+              {data.avgSessionDuration} {isAr ? "دقيقة" : "minutes"}
+            </p>
           </div>
         </div>
       </div>
 
       {/* Chart */}
       <div className="glass-card p-4 border border-border/10">
-        <h4 className="font-bold text-xs font-mono uppercase text-text-secondary mb-4">منحنى جلسات العمل / Productivity Velocity</h4>
+        <h4 className="font-bold text-xs font-mono uppercase text-text-secondary mb-4">
+          {isAr ? "منحنى جلسات العمل" : "Productivity Velocity"}
+        </h4>
         
         <div className="h-48 w-full">
           <ResponsiveContainer width="100%" height="100%">
@@ -122,7 +146,7 @@ export const ProjectAnalytics: React.FC<ProjectAnalyticsProps> = ({ projectId })
                   color: '#fff'
                 }} 
               />
-              <Area type="monotone" dataKey="hours" stroke="var(--color-accent, #6366f1)" strokeWidth={2} fillOpacity={1} fill="url(#colorHours)" name="الساعات" />
+              <Area type="monotone" dataKey="hours" stroke="var(--color-accent, #6366f1)" strokeWidth={2} fillOpacity={1} fill="url(#colorHours)" name={isAr ? "الساعات" : "Hours"} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -130,28 +154,98 @@ export const ProjectAnalytics: React.FC<ProjectAnalyticsProps> = ({ projectId })
 
       {/* Mood Distribution */}
       <div className="glass-card p-4 border border-border/10">
-        <h4 className="font-bold text-xs font-mono uppercase text-text-secondary mb-3.5">التركيز والحالة النفسية / Mood Distribution</h4>
+        <h4 className="font-bold text-xs font-mono uppercase text-text-secondary mb-3.5">
+          {isAr ? "التركيز والحالة النفسية" : "Mood Distribution"}
+        </h4>
         
         <div className="grid grid-cols-3 gap-3">
           <div className="bg-emerald-500/5 border border-emerald-500/10 p-3 rounded-xl text-center">
             <ThumbsUp className="w-4 h-4 text-emerald-400 mx-auto mb-1" />
             <span className="block text-xs font-bold text-emerald-400">{data.moodDistribution?.productive || 0}</span>
-            <span className="text-[10px] text-text-secondary">منجز / Focused</span>
+            <span className="text-[10px] text-text-secondary">
+              {isAr ? "منجز" : "Focused"}
+            </span>
           </div>
 
           <div className="bg-red-500/5 border border-red-500/10 p-3 rounded-xl text-center">
             <Frown className="w-4 h-4 text-red-400 mx-auto mb-1" />
             <span className="block text-xs font-bold text-red-400">{data.moodDistribution?.stuck || 0}</span>
-            <span className="text-[10px] text-text-secondary">عالق / Blocked</span>
+            <span className="text-[10px] text-text-secondary">
+              {isAr ? "عالق" : "Blocked"}
+            </span>
           </div>
 
           <div className="bg-purple-500/5 border border-purple-500/10 p-3 rounded-xl text-center">
             <Sparkles className="w-4 h-4 text-purple-400 mx-auto mb-1" />
             <span className="block text-xs font-bold text-purple-400">{data.moodDistribution?.breakthrough || 0}</span>
-            <span className="text-[10px] text-text-secondary">إلهام / Breakthrough</span>
+            <span className="text-[10px] text-text-secondary">
+              {isAr ? "إلهام" : "Breakthrough"}
+            </span>
           </div>
         </div>
       </div>
+
+      {/* Task Analytics & Insights */}
+      {data.totalTasksCount !== undefined && (
+        <div className="glass-card p-4 border border-border/10 space-y-4">
+          <h4 className="font-bold text-xs font-mono uppercase text-text-secondary">
+            {isAr ? "تحليلات وإحصائيات المهام اليومية المرتبطة" : "Linked Daily Tasks Insights"}
+          </h4>
+          
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-bg-secondary/40 border border-border/5 p-3 rounded-xl text-center">
+              <span className="block text-xs font-black text-text-primary">{data.totalTasksCount}</span>
+              <span className="text-[10px] text-text-secondary block mt-0.5">
+                {isAr ? "إجمالي المهام" : "Total Tasks"}
+              </span>
+            </div>
+            
+            <div className="bg-emerald-500/5 border border-emerald-500/10 p-3 rounded-xl text-center">
+              <span className="block text-xs font-black text-emerald-400">
+                {data.completedTasksCount} ({data.totalTasksCount > 0 ? Math.round(((data.completedTasksCount || 0) / data.totalTasksCount) * 100) : 0}%)
+              </span>
+              <span className="text-[10px] text-emerald-400 block mt-0.5">
+                {isAr ? "مكتملة" : "Completed"}
+              </span>
+            </div>
+
+            <div className="bg-amber-500/5 border border-amber-500/10 p-3 rounded-xl text-center">
+              <span className="block text-xs font-black text-amber-500">
+                {data.tasksTotalMinutes} {isAr ? "دقيقة" : "min"}
+              </span>
+              <span className="text-[10px] text-amber-500 block mt-0.5">
+                {isAr ? "وقت المهام" : "Tasks Time"}
+              </span>
+            </div>
+          </div>
+
+          {/* List of Tasks and Status */}
+          {data.tasksList && data.tasksList.length > 0 && (
+            <div className="space-y-2 pt-2 border-t border-border/5">
+              <span className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">
+                {isAr ? "المهام والوقت المنقضي" : "Tasks Breakdown"}
+              </span>
+              <div className="space-y-1.5 max-h-[200px] overflow-y-auto pr-1">
+                {data.tasksList.map((t: any) => (
+                  <div key={t.id} className="flex items-center justify-between text-xs py-1">
+                    <span className="text-text-secondary truncate max-w-[70%]">{t.title}</span>
+                    <div className="flex items-center gap-1.5 font-mono text-[10px]">
+                      <span className={t.status === 'done' ? 'text-emerald-400' : 'text-amber-500'}>
+                        {t.status === 'done' ? (isAr ? 'مكتمل' : 'Done') : (isAr ? 'قيد العمل' : 'Doing')}
+                      </span>
+                      {t.spent_min > 0 && (
+                        <span className="text-text-secondary bg-bg-secondary px-1.5 py-0.5 rounded">
+                          {t.spent_min}m
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

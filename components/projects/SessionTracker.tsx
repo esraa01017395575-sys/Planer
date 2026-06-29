@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Play, Pause, RotateCcw, Save, Trash2, Clock, ThumbsUp, Frown, Sparkles } from 'lucide-react';
 import { Project } from '../../types/projects';
+import { useAppContext } from '../../context/AppContext';
 
 interface SessionTrackerProps {
   project: Project;
@@ -15,6 +16,9 @@ interface SessionTrackerProps {
 }
 
 export const SessionTracker: React.FC<SessionTrackerProps> = ({ project, onSaveSession }) => {
+  const { language } = useAppContext();
+  const isAr = language === 'ar';
+
   const [isActive, setIsActive] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [sessionTitle, setSessionTitle] = useState('');
@@ -67,8 +71,8 @@ export const SessionTracker: React.FC<SessionTrackerProps> = ({ project, onSaveS
   const handleSave = () => {
     const minutesSpent = Math.max(1, Math.round(seconds / 60));
     onSaveSession({
-      title: sessionTitle || `Session on ${project.title}`,
-      description: `تتبع جلسة عمل لمدة ${minutesSpent} دقيقة`,
+      title: sessionTitle || (isAr ? `جلسة عمل على ${project.title}` : `Session on ${project.title}`),
+      description: isAr ? `تتبع جلسة عمل لمدة ${minutesSpent} دقيقة` : `Session tracking spent ${minutesSpent} minutes`,
       duration: minutesSpent,
       tasksCompleted: selectedTasks,
       notes: sessionNotes,
@@ -88,9 +92,11 @@ export const SessionTracker: React.FC<SessionTrackerProps> = ({ project, onSaveS
         <div>
           <h3 className="font-display font-bold text-lg text-text-primary flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-accent animate-ping" />
-            جاري العمل الآن / Active Session
+            {isAr ? "جاري العمل الآن" : "Active Session"}
           </h3>
-          <p className="text-xs text-text-secondary mt-1">تتبع وقتك وإنجازاتك في الوقت الفعلي</p>
+          <p className="text-xs text-text-secondary mt-1">
+            {isAr ? "تتبع وقتك وإنجازاتك في الوقت الفعلي" : "Track your focus time and progress in real-time"}
+          </p>
         </div>
         <div className="flex items-center gap-1.5 p-1.5 bg-bg-secondary rounded-xl border border-border/10">
           <Clock className="w-4 h-4 text-accent" />
@@ -113,12 +119,12 @@ export const SessionTracker: React.FC<SessionTrackerProps> = ({ project, onSaveS
           {isActive ? (
             <>
               <Pause className="w-5 h-5" />
-              <span>إيقاف مؤقت / Pause</span>
+              <span>{isAr ? "إيقاف مؤقت" : "Pause"}</span>
             </>
           ) : (
             <>
               <Play className="w-5 h-5 fill-white" />
-              <span>ابدأ الجلسة / Start Work</span>
+              <span>{isAr ? "ابدأ الجلسة" : "Start Focus"}</span>
             </>
           )}
         </button>
@@ -127,7 +133,7 @@ export const SessionTracker: React.FC<SessionTrackerProps> = ({ project, onSaveS
           onClick={resetTimer}
           disabled={seconds === 0}
           className="p-3.5 text-text-secondary hover:text-red-400 bg-bg-secondary hover:bg-red-500/10 rounded-2xl border border-border/10 transition-all disabled:opacity-40 disabled:hover:bg-bg-secondary disabled:hover:text-text-secondary"
-          title="إعادة تعيين / Reset"
+          title={isAr ? "إعادة تعيين" : "Reset"}
         >
           <RotateCcw className="w-5 h-5" />
         </button>
@@ -138,18 +144,22 @@ export const SessionTracker: React.FC<SessionTrackerProps> = ({ project, onSaveS
           {/* Inputs */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold text-text-secondary uppercase mb-2">عنوان الجلسة / Focus Title</label>
+              <label className="block text-xs font-bold text-text-secondary uppercase mb-2">
+                {isAr ? "عنوان الجلسة" : "Focus Title"}
+              </label>
               <input
                 type="text"
                 value={sessionTitle}
                 onChange={(e) => setSessionTitle(e.target.value)}
-                placeholder="مثال: بناء نموذج قاعدة البيانات..."
+                placeholder={isAr ? "مثال: بناء نموذج قاعدة البيانات..." : "e.g. Design database schema..."}
                 className="w-full h-11 px-4 rounded-xl bg-bg-secondary border border-border/15 font-medium text-sm focus:border-accent"
               />
             </div>
             
             <div>
-              <label className="block text-xs font-bold text-text-secondary uppercase mb-2">الحالة والمزاج / Session Mood</label>
+              <label className="block text-xs font-bold text-text-secondary uppercase mb-2">
+                {isAr ? "الحالة والمزاج" : "Session Mood"}
+              </label>
               <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
@@ -161,7 +171,7 @@ export const SessionTracker: React.FC<SessionTrackerProps> = ({ project, onSaveS
                   }`}
                 >
                   <ThumbsUp className="w-4 h-4" />
-                  <span>منجز</span>
+                  <span>{isAr ? "منجز" : "Productive"}</span>
                 </button>
 
                 <button
@@ -174,7 +184,7 @@ export const SessionTracker: React.FC<SessionTrackerProps> = ({ project, onSaveS
                   }`}
                 >
                   <Frown className="w-4 h-4" />
-                  <span>عالق</span>
+                  <span>{isAr ? "عالق" : "Stuck"}</span>
                 </button>
 
                 <button
@@ -187,7 +197,7 @@ export const SessionTracker: React.FC<SessionTrackerProps> = ({ project, onSaveS
                   }`}
                 >
                   <Sparkles className="w-4 h-4" />
-                  <span>طفرة</span>
+                  <span>{isAr ? "طفرة" : "Insight"}</span>
                 </button>
               </div>
             </div>
@@ -195,11 +205,13 @@ export const SessionTracker: React.FC<SessionTrackerProps> = ({ project, onSaveS
 
           {/* Notes */}
           <div>
-            <label className="block text-xs font-bold text-text-secondary uppercase mb-2">ملاحظات ودروس مستفادة / Notes & Retro</label>
+            <label className="block text-xs font-bold text-text-secondary uppercase mb-2">
+              {isAr ? "ملاحظات ودروس مستفادة" : "Notes & Retro"}
+            </label>
             <textarea
               value={sessionNotes}
               onChange={(e) => setSessionNotes(e.target.value)}
-              placeholder="اكتب ما تم إنجازه، العقبات التي واجهتها..."
+              placeholder={isAr ? "اكتب ما تم إنجازه، العقبات التي واجهتها..." : "Describe tasks completed, milestones met or lessons learned..."}
               rows={2}
               className="w-full p-3.5 rounded-xl bg-bg-secondary border border-border/15 text-sm focus:border-accent"
             />
@@ -208,7 +220,9 @@ export const SessionTracker: React.FC<SessionTrackerProps> = ({ project, onSaveS
           {/* Task checklist if active milestones suggest them */}
           {allSuggestedTasks.length > 0 && (
             <div>
-              <label className="block text-xs font-bold text-text-secondary uppercase mb-2">المهام المكتملة خلال الجلسة / Check Completed Tasks</label>
+              <label className="block text-xs font-bold text-text-secondary uppercase mb-2">
+                {isAr ? "المهام المكتملة خلال الجلسة" : "Check Completed Tasks"}
+              </label>
               <div className="max-h-36 overflow-y-auto no-scrollbar space-y-2.5 p-1 bg-bg-secondary/40 rounded-xl border border-border/10">
                 {allSuggestedTasks.map((t, index) => {
                   const isChecked = selectedTasks.includes(t);
@@ -235,7 +249,7 @@ export const SessionTracker: React.FC<SessionTrackerProps> = ({ project, onSaveS
               className="w-full sm:w-auto h-11 px-6 bg-accent hover:bg-accent/90 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-accent/20 cursor-pointer"
             >
               <Save className="w-4 h-4" />
-              <span>حفظ الجلسة والتقدم / Save Session</span>
+              <span>{isAr ? "حفظ الجلسة والتقدم" : "Save Session & Progress"}</span>
             </button>
           </div>
         </div>

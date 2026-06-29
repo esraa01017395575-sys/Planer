@@ -16,40 +16,13 @@ import {
   useGetChatSessions, useCreateChatSession, useDeleteChatSession, 
   useUpdateChatSession, useGetChatMessages, useSaveChatMessage
 } from '../lib/hooks';
+import { ChatSidebar } from '../components/chat/ChatSidebar';
 
 const INITIAL_AI_MESSAGE_EN = `Hello! I am your AI Coach. I'm here to help you build healthy habits, plan your day correctly, and achieve your goals.
 I can access your current tasks and habits to provide personalized advice. How can I help you organize your life today?`;
 
 const INITIAL_AI_MESSAGE_AR = `مرحباً! أنا مدربك الذكي (AI Coach). أنا هنا لأساعدك في بناء عادات صحية، تخطيط يومك بشكل صحيح، وتحقيق أهدافك.
 يمكنني الوصول إلى مهامك وعاداتك الحالية لأقدم لك نصائح مخصصة. كيف يمكنني مساعدتك اليوم في تنظيم حياتك؟`;
-
-const Typewriter = ({ text, speed = 10 }: { text: string; speed?: number }) => {
-  const [displayedText, setDisplayedText] = useState("");
-  const textRef = useRef(text);
-  
-  useEffect(() => {
-    textRef.current = text;
-    let index = 0;
-    setDisplayedText("");
-    
-    const interval = setInterval(() => {
-      setDisplayedText((prev) => {
-        const full = textRef.current;
-        if (index >= full.length) {
-          clearInterval(interval);
-          return full;
-        }
-        const nextChar = full[index];
-        index++;
-        return prev + (nextChar !== undefined ? nextChar : "");
-      });
-    }, speed);
-    
-    return () => clearInterval(interval);
-  }, [text, speed]);
-  
-  return <span>{displayedText}</span>;
-};
 
 type Message = { role: 'user' | 'model', content: string, created_at?: string, timestamp?: Date, file?: File | null };
 
@@ -140,10 +113,7 @@ EDGE FUNCTIONS & AI TOOLS:
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [suggestedTasks, setSuggestedTasks] = useState<any[]>([]);
-  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-  const [editTitle, setEditTitle] = useState('');
   const [showSidebar, setShowSidebar] = useState(false);
-  const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
   const [triggeredWelcomeSessions, setTriggeredWelcomeSessions] = useState<Set<string>>(new Set());
 
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -174,7 +144,8 @@ EDGE FUNCTIONS & AI TOOLS:
         body: JSON.stringify({
           prompt: "initiate_chat_welcome",
           systemInstruction: getSystemInstruction(),
-          context
+          context,
+          sessionId
         })
       });
 
@@ -332,7 +303,8 @@ EDGE FUNCTIONS & AI TOOLS:
             prompt: userMessage,
             systemInstruction: getSystemInstruction(),
             context,
-            fileData: filePayload
+            fileData: filePayload,
+            sessionId
           })
         });
       }
@@ -385,10 +357,9 @@ EDGE FUNCTIONS & AI TOOLS:
     }
   };
 
-  const handleRename = async (id: string) => {
-    if (!editTitle.trim()) return;
-    await updateSession(id, editTitle);
-    setEditingSessionId(null);
+  const handleRename = async (id: string, newTitle: string) => {
+    if (!newTitle.trim()) return;
+    await updateSession(id, newTitle);
     refetchSessions();
   };
 
@@ -398,7 +369,6 @@ EDGE FUNCTIONS & AI TOOLS:
       setCurrentSessionId(null);
       setMessages([]);
     }
-    setSessionToDelete(null);
     refetchSessions();
   };
 
@@ -408,6 +378,46 @@ EDGE FUNCTIONS & AI TOOLS:
   const parseSuggestions = (content: string) => {
     if (!content) return { cleanContent: '', suggestions: null };
     try {
+      const allowedCategories = ["spiritual", "health", "learning", "productivity", "social", "work", "fitness", "mindfulness"];
+      const allowedFrequencies = ["daily", "weekly"];
+
+      const sanitizeHabit = (h: any) => {
+        if (!h) return h;
+        let category = String(h.category || h.category_name || "health").trim().toLowerCase();
+        if (!allowedCategories.includes(category)) {
+          if (category.includes("nutr") || category.includes("food") || category.includes("diet")) {
+            category = "health";
+          } else if (category.includes("job") || category.includes("career")) {
+            category = "work";
+          } else if (category.includes("fit") || category.includes("gym") || category.includes("sport")) {
+            category = "fitness";
+          } else if (category.includes("learn") || category.includes("studi") || category.includes("book") || category.includes("read")) {
+            category = "learning";
+          } else if (category.includes("mind") || category.includes("meditat") || category.includes("calm") || category.includes("spirit")) {
+            category = "mindfulness";
+          } else {
+            category = "health";
+          }
+        }
+        
+        let frequency = String(h.frequency || "daily").trim().toLowerCase();
+        if (!allowedFrequencies.includes(frequency)) {
+          if (frequency.includes("day") || frequency.includes("daily") || frequency.includes("يوم")) {
+            frequency = "daily";
+          } else if (frequency.includes("week") || frequency.includes("weekly") || frequency.includes("أسبوع") || frequency.includes("اسبوع")) {
+            frequency = "weekly";
+          } else {
+            frequency = "daily";
+          }
+        }
+        
+        return {
+          ...h,
+          category,
+          frequency
+        };
+      };
+
       const jsonRegex = /```(?:json)?\s*([\s\S]*?)\s*```/gi;
       let match;
       while ((match = jsonRegex.exec(content)) !== null) {
@@ -415,14 +425,16 @@ EDGE FUNCTIONS & AI TOOLS:
           const possibleJson = match[1].trim();
           const decoded = JSON.parse(possibleJson);
           if (decoded) {
-            // Check if it's the new consolidated multiple-type suggestions schema
+            // Check if it's the consolidated multiple-type suggestions schema
             if (decoded.type === 'suggestions' || Array.isArray(decoded.tasks) || Array.isArray(decoded.habits)) {
               const clean = content.replace(match[0], '').trim();
+              const tasks = Array.isArray(decoded.tasks) ? decoded.tasks : [];
+              const habits = Array.isArray(decoded.habits) ? decoded.habits : [];
               return {
                 cleanContent: clean,
                 suggestions: {
-                  tasks: Array.isArray(decoded.tasks) ? decoded.tasks : [],
-                  habits: Array.isArray(decoded.habits) ? decoded.habits : []
+                  tasks: tasks,
+                  habits: habits.map(sanitizeHabit)
                 }
               };
             }
@@ -442,6 +454,30 @@ EDGE FUNCTIONS & AI TOOLS:
           // Ignore and check next codeblock
         }
       }
+
+      // Fallback search for loose JSON blocks if the model forgot markdown backticks
+      const curlyRegex = /\{[\s\S]*"type"\s*:\s*"suggestions"[\s\S]*\}/gi;
+      const looseMatch = curlyRegex.exec(content);
+      if (looseMatch) {
+        try {
+          const decoded = JSON.parse(looseMatch[0]);
+          if (decoded) {
+            const clean = content.replace(looseMatch[0], '').trim();
+            const tasks = Array.isArray(decoded.tasks) ? decoded.tasks : [];
+            const habits = Array.isArray(decoded.habits) ? decoded.habits : [];
+            return {
+              cleanContent: clean,
+              suggestions: {
+                tasks: tasks,
+                habits: habits.map(sanitizeHabit)
+              }
+            };
+          }
+        } catch (looseE) {
+          // Ignore loose parsing failure
+        }
+      }
+
     } catch (e) {
       console.error('Failed to parse AI suggestions:', e);
     }
@@ -512,11 +548,43 @@ EDGE FUNCTIONS & AI TOOLS:
       return;
     }
 
+    // Strict validation and sanitization for database enums
+    const ALLOWED_CATEGORIES = ["spiritual", "health", "learning", "productivity", "social", "work", "fitness", "mindfulness"];
+    const ALLOWED_FREQUENCIES = ["daily", "weekly"];
+
+    let category = String(habit.category || 'health').toLowerCase().trim();
+    if (!ALLOWED_CATEGORIES.includes(category)) {
+      if (category.includes('nutri') || category.includes('diet') || category.includes('food') || category.includes('eat')) {
+        category = 'health';
+      } else if (category.includes('job') || category.includes('career') || category.includes('office')) {
+        category = 'work';
+      } else if (category.includes('sport') || category.includes('gym') || category.includes('train')) {
+        category = 'fitness';
+      } else if (category.includes('mind') || category.includes('meditat') || category.includes('calm') || category.includes('spirit')) {
+        category = 'mindfulness';
+      } else if (category.includes('learn') || category.includes('studi') || category.includes('book') || category.includes('read')) {
+        category = 'learning';
+      } else {
+        category = 'health'; // Safe default
+      }
+    }
+
+    let frequency = String(habit.frequency || 'daily').toLowerCase().trim();
+    if (!ALLOWED_FREQUENCIES.includes(frequency)) {
+      if (frequency.includes('day') || frequency.includes('daily') || frequency.includes('يوم')) {
+        frequency = 'daily';
+      } else if (frequency.includes('week') || frequency.includes('weekly') || frequency.includes('أسبوع') || frequency.includes('اسبوع')) {
+        frequency = 'weekly';
+      } else {
+        frequency = 'daily'; // Safe default
+      }
+    }
+
     createHabit({
       data: {
         name: habitName,
-        category: habit.category || 'health',
-        frequency: habit.frequency || 'daily',
+        category,
+        frequency,
         target_per_day: habit.target_per_day || 1,
         xp_per_complete: habit.xp_per_complete || 10,
         reminder_time: habit.reminder_time || null,
@@ -533,7 +601,7 @@ EDGE FUNCTIONS & AI TOOLS:
   };
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] bg-bg-primary rounded-[2.5rem] overflow-hidden relative shadow-2xl border border-border/10">
+    <div className="flex flex-1 h-full w-full bg-bg-primary rounded-2xl md:rounded-[2.5rem] overflow-hidden relative shadow-2xl border border-border/10">
       {/* Mobile/Desktop Sidebar Overlay */}
       <AnimatePresence>
         {showSidebar && (
@@ -568,7 +636,7 @@ EDGE FUNCTIONS & AI TOOLS:
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 lg:px-8 xl:px-12 pt-16 space-y-8 pb-28 no-scrollbar">
+        <div className="flex-1 overflow-y-auto px-4 lg:px-8 xl:px-12 pt-20 space-y-8 pb-4 no-scrollbar">
           {messages.length === 0 && !isLoading && (
             <div className="flex flex-col items-center justify-center h-full text-center py-12">
               <div className="relative mb-8">
@@ -598,25 +666,21 @@ EDGE FUNCTIONS & AI TOOLS:
                 className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
                 <div className="flex flex-col gap-4 max-w-[90%] lg:max-w-[75%]">
-                  <div className={`rounded-[1.5rem] lg:rounded-[2rem] p-5 lg:p-7 shadow-xl relative ${
+                  <div className={`rounded-2xl md:rounded-[1.5rem] lg:rounded-[2rem] p-3.5 md:p-5 lg:p-7 shadow-xl relative ${
                     msg.role === 'user'
                       ? 'bg-accent text-white rounded-tr-none'
                       : 'glass-card text-text-primary rounded-tl-none border border-border/50 bg-bg-secondary/40 backdrop-blur-md'
                   }`}>
                     {msg.role === 'model' && (
-                      <div className="flex items-center gap-2 mb-3 pb-2 border-b border-border/5 shadow-inner">
-                        <Brain className="w-4 h-4 text-accent" />
-                        <span className="text-[10px] font-black text-accent uppercase tracking-[0.2em]">
+                      <div className="flex items-center gap-1.5 mb-2 pb-1.5 border-b border-border/5 shadow-inner">
+                        <Brain className="w-3.5 h-3.5 text-accent" />
+                        <span className="text-[9px] md:text-[10px] font-black text-accent uppercase tracking-[0.2em]">
                           {language === 'ar' ? "المدرب الذكي" : "AI Coach"}
                         </span>
                       </div>
                     )}
-                    <div className="text-[15px] lg:text-[17px] leading-relaxed whitespace-pre-wrap font-medium">
-                      {msg.role === 'model' && idx === messages.length - 1 && !isLoading ? (
-                        <Typewriter text={cleanContent} />
-                      ) : (
-                        cleanContent
-                      )}
+                    <div className="text-[13px] md:text-[15px] lg:text-[17px] leading-relaxed whitespace-pre-wrap font-medium">
+                      {cleanContent}
                     </div>
                   </div>
 
@@ -631,20 +695,20 @@ EDGE FUNCTIONS & AI TOOLS:
                             key={`task-${sIdx}`}
                             initial={{ scale: 0.95, opacity: 0 }}
                             animate={{ scale: 1, opacity: 1 }}
-                            className="bg-bg-card border border-border rounded-2xl p-4 shadow-lg flex items-center justify-between gap-4"
+                            className="bg-bg-card border border-border rounded-xl md:rounded-2xl p-3 md:p-4 shadow-lg flex items-center justify-between gap-3 md:gap-4"
                           >
-                            <div className="flex-1">
-                              <span className="text-[9px] font-bold text-accent uppercase tracking-wider mb-1 block">
+                            <div className="flex-1 min-w-0">
+                              <span className="text-[8px] md:text-[9px] font-bold text-accent uppercase tracking-wider mb-0.5 block">
                                 📝 {language === 'ar' ? 'مهمة مقترحة' : 'Suggested Task'}
                               </span>
-                              <h4 className="font-bold text-sm text-text-primary">{task.title}</h4>
-                              <p className="text-[10px] text-text-secondary line-clamp-1">{task.description}</p>
+                              <h4 className="font-bold text-xs md:text-sm text-text-primary truncate">{task.title}</h4>
+                              <p className="text-[9px] md:text-[10px] text-text-secondary truncate">{task.description}</p>
                               
-                              <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                                <span className="text-[8px] font-bold uppercase py-0.5 px-1.5 rounded bg-bg-secondary text-text-secondary border border-border">
+                              <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                <span className="text-[7.5px] md:text-[8px] font-bold uppercase py-0.5 px-1 rounded bg-bg-secondary text-text-secondary border border-border">
                                   {task.due_date}
                                 </span>
-                                <span className={`text-[8px] font-bold uppercase py-0.5 px-1.5 rounded border ${
+                                <span className={`text-[7.5px] md:text-[8px] font-bold uppercase py-0.5 px-1 rounded border ${
                                   task.priority === 'high' ? 'bg-red-500/10 text-red-500 border-red-500/20' :
                                   task.priority === 'medium' ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' :
                                   'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
@@ -652,24 +716,24 @@ EDGE FUNCTIONS & AI TOOLS:
                                   {task.priority}
                                 </span>
                                 {task.scheduled_time && (
-                                  <span className="flex items-center gap-1 text-[8px] font-bold uppercase py-0.5 px-1.5 rounded bg-bg-secondary text-text-secondary border border-border">
+                                  <span className="flex items-center gap-1 text-[7.5px] md:text-[8px] font-bold uppercase py-0.5 px-1 rounded bg-bg-secondary text-text-secondary border border-border">
                                     <Clock className="w-2.5 h-2.5" />
                                     {task.scheduled_time}
                                   </span>
                                 )}
                                 {(task.estimated_min || task.duration) && (
-                                  <span className="text-[8px] font-bold uppercase py-0.5 px-1.5 rounded bg-bg-secondary text-text-secondary border border-border">
+                                  <span className="text-[7.5px] md:text-[8px] font-bold uppercase py-0.5 px-1 rounded bg-bg-secondary text-text-secondary border border-border">
                                     {task.estimated_min || task.duration} {language === 'ar' ? 'دقيقة' : 'mins'}
                                   </span>
                                 )}
                               </div>
 
                               {task.subtasks && Array.isArray(task.subtasks) && task.subtasks.length > 0 && (
-                                <div className="mt-2.5 pl-2.5 border-l-2 border-accent/30 space-y-1">
+                                <div className="mt-2 pl-2 border-l-2 border-accent/20 space-y-0.5">
                                   {task.subtasks.map((st: any, stIdx: number) => (
-                                    <div key={stIdx} className="flex items-center gap-1.5 text-[10px] text-text-secondary font-semibold">
-                                      <span className="w-1.5 h-1.5 rounded-full bg-accent" />
-                                      <span>{typeof st === 'string' ? st : (st.title || st.name)}</span>
+                                    <div key={stIdx} className="flex items-center gap-1 text-[9px] md:text-[10px] text-text-secondary font-semibold">
+                                      <span className="w-1 h-1 rounded-full bg-accent" />
+                                      <span className="truncate">{typeof st === 'string' ? st : (st.title || st.name)}</span>
                                     </div>
                                   ))}
                                 </div>
@@ -678,13 +742,13 @@ EDGE FUNCTIONS & AI TOOLS:
                             <button
                               disabled={isAccepted}
                               onClick={() => handleAcceptTask(task, sIdx, idx)}
-                              className={`flex-shrink-0 w-12 h-12 rounded-xl flex items-center justify-center transition-all ${
+                              className={`flex-shrink-0 w-9 h-9 md:w-11 md:h-11 rounded-lg md:rounded-xl flex items-center justify-center transition-all ${
                                 isAccepted 
                                   ? 'bg-emerald-500 text-white cursor-default' 
                                   : 'bg-accent/10 text-accent hover:bg-accent hover:text-white border border-accent/20'
                               }`}
                             >
-                              {isAccepted ? <Check className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
+                              {isAccepted ? <Check className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
                             </button>
                           </motion.div>
                         );
@@ -700,40 +764,60 @@ EDGE FUNCTIONS & AI TOOLS:
                             key={`habit-${sIdx}`}
                             initial={{ scale: 0.95, opacity: 0 }}
                             animate={{ scale: 1, opacity: 1 }}
-                            className="bg-bg-card border border-border rounded-2xl p-4 shadow-lg flex items-center justify-between gap-4"
+                            className="bg-bg-card border border-border rounded-xl md:rounded-2xl p-3 md:p-4 shadow-lg flex items-center justify-between gap-3 md:gap-4"
                           >
-                            <div className="flex-1">
-                              <span className="text-[9px] font-bold text-emerald-500 uppercase tracking-wider mb-1 block">
+                            <div className="flex-1 min-w-0">
+                              <span className="text-[8px] md:text-[9px] font-bold text-emerald-500 uppercase tracking-wider mb-0.5 block">
                                 ✨ {language === 'ar' ? 'عادة مقترحة' : 'Suggested Habit'}
                               </span>
-                              <div className="flex items-center gap-2">
-                                <span className="text-xl">{habit.emoji || '✨'}</span>
-                                <h4 className="font-bold text-sm text-text-primary">{habit.name || habit.title}</h4>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-base md:text-xl">{habit.emoji || '✨'}</span>
+                                <h4 className="font-bold text-xs md:text-sm text-text-primary truncate">{habit.name || habit.title}</h4>
                               </div>
-                              {habit.reason && <p className="text-[10px] text-text-secondary mt-1">{habit.reason}</p>}
+                              {habit.reason && <p className="text-[9px] md:text-[10px] text-text-secondary mt-0.5 truncate">{habit.reason}</p>}
                               
-                              <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                                <span className="text-[8px] font-bold uppercase py-0.5 px-1.5 rounded bg-bg-secondary text-text-secondary border border-border">
+                              <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                <span className="text-[7.5px] md:text-[8px] font-bold uppercase py-0.5 px-1 rounded bg-bg-secondary text-text-secondary border border-border">
                                   {habit.frequency === 'weekly' ? (language === 'ar' ? 'أسبوعي' : 'Weekly') : (language === 'ar' ? 'يومي' : 'Daily')}
                                 </span>
-                                <span className="text-[8px] font-bold uppercase py-0.5 px-1.5 rounded bg-bg-secondary text-text-secondary border border-border">
-                                  {habit.category === 'health' ? (language === 'ar' ? 'صحة' : 'Health') :
-                                   habit.category === 'learning' ? (language === 'ar' ? 'تعلم' : 'Learning') :
-                                   habit.category === 'work' ? (language === 'ar' ? 'عمل' : 'Work') :
-                                   (language === 'ar' ? 'أخرى' : 'Other')}
+                                <span className="text-[7.5px] md:text-[8px] font-bold uppercase py-0.5 px-1 rounded bg-bg-secondary text-text-secondary border border-border">
+                                  {(() => {
+                                    const cat = String(habit.category || 'health').toLowerCase();
+                                    if (language === 'ar') {
+                                      if (cat === 'spiritual') return 'روحاني';
+                                      if (cat === 'health') return 'صحة';
+                                      if (cat === 'learning') return 'تعلم';
+                                      if (cat === 'productivity') return 'إنتاجية';
+                                      if (cat === 'social') return 'اجتماعي';
+                                      if (cat === 'work') return 'عمل';
+                                      if (cat === 'fitness') return 'لياقة بدنية';
+                                      if (cat === 'mindfulness') return 'يقظة ذهنية';
+                                      return 'أخرى';
+                                    } else {
+                                      if (cat === 'spiritual') return 'Spiritual';
+                                      if (cat === 'health') return 'Health';
+                                      if (cat === 'learning') return 'Learning';
+                                      if (cat === 'productivity') return 'Productivity';
+                                      if (cat === 'social') return 'Social';
+                                      if (cat === 'work') return 'Work';
+                                      if (cat === 'fitness') return 'Fitness';
+                                      if (cat === 'mindfulness') return 'Mindfulness';
+                                      return 'Other';
+                                    }
+                                  })()}
                                 </span>
                               </div>
                             </div>
                             <button
                               disabled={isAccepted}
                               onClick={() => handleAcceptHabit(habit, sIdx, idx)}
-                              className={`flex-shrink-0 w-12 h-12 rounded-xl flex items-center justify-center transition-all ${
+                              className={`flex-shrink-0 w-9 h-9 md:w-11 md:h-11 rounded-lg md:rounded-xl flex items-center justify-center transition-all ${
                                 isAccepted 
                                   ? 'bg-emerald-500 text-white cursor-default' 
                                   : 'bg-accent/10 text-accent hover:bg-accent hover:text-white border border-accent/20'
                               }`}
                             >
-                              {isAccepted ? <Check className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
+                              {isAccepted ? <Check className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
                             </button>
                           </motion.div>
                         );
@@ -774,8 +858,8 @@ EDGE FUNCTIONS & AI TOOLS:
         </div>
 
         {/* Input area */}
-        <div className="absolute bottom-3 lg:bottom-4 left-3 lg:left-4 right-3 lg:right-4">
-          <div className="max-w-4xl mx-auto rounded-3xl p-1 bg-bg-card/90 backdrop-blur-xl border-none shadow-xl flex items-end gap-2 transition-all shadow-black/10 focus-within:ring-1 focus-within:ring-accent/30">
+        <div className="p-3 lg:p-4 bg-bg-card/45 border-t border-border/10 backdrop-blur-xl shrink-0">
+          <div className="max-w-5xl mx-auto rounded-3xl p-1 bg-bg-card/90 border border-border/10 shadow-xl flex items-end gap-2 transition-all shadow-black/10 focus-within:ring-1 focus-within:ring-accent/30">
             <label className="p-2 w-10 h-10 flex items-center justify-center rounded-2xl bg-bg-secondary text-text-secondary hover:text-accent transition-all cursor-pointer flex-shrink-0">
               <input type="file" className="hidden" onChange={e => setAttachedFile(e.target.files?.[0] || null)} />
               <Paperclip className="w-5 h-5" />
@@ -820,145 +904,17 @@ EDGE FUNCTIONS & AI TOOLS:
         </div>
       </div>
 
-      {/* Right Sidebar - History (Floating Drawer) */}
-      <motion.div 
-        initial={{ x: 400 }}
-        animate={{ x: showSidebar ? 0 : 400 }}
-        transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-        className="fixed inset-y-2 right-2 w-80 lg:w-96 bg-bg-secondary border border-border flex flex-col h-[calc(100vh-5rem)] z-50 rounded-[2rem] shadow-[-20px_0_50px_rgba(0,0,0,0.2)] overflow-hidden"
-      >
-        <div className="p-6 border-b border-border bg-bg-primary/50 backdrop-blur-md flex items-center justify-between">
-          <h3 className="text-lg font-bold text-text-primary flex items-center gap-2 font-display">
-            {language === 'ar' ? "تاريخ المحادثات" : "Chat History"}
-          </h3>
-          <button 
-            onClick={() => setShowSidebar(false)}
-            className="p-2 hover:bg-bg-primary rounded-xl text-text-secondary transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        
-        <div className="p-4 border-b border-border">
-          <button 
-            onClick={() => {
-              setCurrentSessionId(null);
-              setShowSidebar(false);
-            }}
-            className="w-full py-3 bg-accent/10 border border-accent/20 text-accent rounded-xl hover:bg-accent hover:text-white transition-all flex items-center justify-center gap-2 font-bold text-sm"
-          >
-            <Plus className="w-4 h-4" />
-            {language === 'ar' ? "محادثة جديدة" : "New Chat"}
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 space-y-2 no-scrollbar">
-          {sessions.map((session) => (
-            <div 
-              key={session.id}
-              onClick={() => {
-                setCurrentSessionId(session.id);
-                if (window.innerWidth < 1024) setShowSidebar(false);
-              }}
-              className={`group p-4 rounded-2xl cursor-pointer transition-all border ${
-                currentSessionId === session.id 
-                  ? 'bg-accent/10 border-accent/30 text-accent' 
-                  : 'bg-bg-primary/30 border-transparent text-text-secondary hover:bg-bg-primary hover:border-border'
-              }`}
-            >
-              <div className={`flex items-center justify-between gap-3 ${language === 'ar' ? 'flex-row-reverse' : ''}`}>
-                <div className={`flex items-center gap-3 flex-1 min-w-0 ${language === 'ar' ? 'flex-row-reverse' : ''}`}>
-                  <MessageSquare className={`w-4 h-4 flex-shrink-0 ${currentSessionId === session.id ? 'text-accent' : 'text-text-secondary'}`} />
-                  {editingSessionId === session.id ? (
-                    <input 
-                      autoFocus
-                      className={`bg-transparent border-none outline-none text-sm font-bold w-full p-0 ${language === 'ar' ? 'text-right' : 'text-left'}`}
-                      value={editTitle}
-                      onChange={e => setEditTitle(e.target.value)}
-                      onBlur={() => handleRename(session.id)}
-                      onKeyDown={e => e.key === 'Enter' && handleRename(session.id)}
-                      onClick={e => e.stopPropagation()}
-                    />
-                  ) : (
-                    <span className={`text-sm font-bold truncate w-full ${language === 'ar' ? 'text-right' : 'text-left'}`}>{session.title}</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditingSessionId(session.id);
-                      setEditTitle(session.title);
-                    }}
-                    className="p-1.5 hover:text-accent"
-                  >
-                    <Edit2 className="w-3 h-3" />
-                  </button>
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSessionToDelete(session.id);
-                    }}
-                    className="p-1.5 hover:text-red-500"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-              <span className={`text-[10px] opacity-40 mt-1 block font-mono ${language === 'ar' ? 'text-right' : 'text-left'}`}>
-                {new Date(session.updated_at).toLocaleDateString()}
-              </span>
-            </div>
-          ))}
-        </div>
-      </motion.div>
-
-      {/* Delete Confirmation Modal */}
-      <AnimatePresence>
-        {sessionToDelete && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setSessionToDelete(null)}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            />
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-bg-primary border border-border w-full max-w-sm rounded-[2rem] p-8 shadow-2xl relative z-10"
-            >
-              <div className="w-16 h-16 bg-red-500/10 rounded-2xl flex items-center justify-center mb-6 mx-auto">
-                <Trash2 className="w-8 h-8 text-red-500" />
-              </div>
-              <h3 className="text-2xl font-bold text-center mb-2 font-display">
-                {language === 'ar' ? "مسح المحادثة؟" : "Delete Conversation?"}
-              </h3>
-              <p className="text-text-secondary text-center mb-8">
-                {language === 'ar' 
-                  ? "هل أنتِ متأكدة؟ سيتم حذف جميع الرسائل نهائياً." 
-                  : "Are you sure? This will permanently delete all messages."}
-              </p>
-              <div className="flex flex-col gap-3">
-                <button 
-                  onClick={() => handleDelete(sessionToDelete)}
-                  className="w-full py-4 bg-red-500 text-white rounded-2xl font-bold hover:bg-red-600 transition-all shadow-lg shadow-red-500/20"
-                >
-                  {language === 'ar' ? "حذف المحادثة" : "Delete Chat"}
-                </button>
-                <button 
-                  onClick={() => setSessionToDelete(null)}
-                  className="w-full py-3 text-text-secondary font-medium hover:text-text-primary transition-all text-sm"
-                >
-                  {language === 'ar' ? "تراجع" : "Cancel"}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <ChatSidebar
+        sessions={sessions}
+        currentSessionId={currentSessionId}
+        setCurrentSessionId={setCurrentSessionId}
+        showSidebar={showSidebar}
+        setShowSidebar={setShowSidebar}
+        language={language}
+        onRename={handleRename}
+        onDelete={handleDelete}
+        onNewChat={handleCreateNewChat}
+      />
     </div>
   );
 };

@@ -42,6 +42,7 @@ export interface Task {
   memory_notes?: string;
   references_urls?: string[];
   estimated_min?: number;
+  spent_min?: number;
   xp_reward?: number;
   goal_id?: string;
   created_at: string;

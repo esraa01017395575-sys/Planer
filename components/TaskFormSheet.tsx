@@ -8,7 +8,7 @@ import {
   Loader2,
   ArrowRight,
 } from "lucide-react";
-import { format } from "date-fns";
+import { format, addDays } from "date-fns";
 import { useAppContext } from "../context/AppContext";
 import {
   useUpdateTask,
@@ -45,21 +45,19 @@ export const TaskFormSheet: React.FC<TaskFormSheetProps> = ({
 
   const [projects, setProjects] = useState<any[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const [dueDate, setDueDate] = useState(() => format(new Date(), "yyyy-MM-dd"));
+  const [priority, setPriority] = useState("medium");
 
   useEffect(() => {
     const fetchProjects = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        const headers: HeadersInit = session?.access_token 
-          ? { "Authorization": `Bearer ${session.access_token}` }
-          : {};
-
-        const res = await fetch("/api/projects", { headers });
-        if (res.ok) {
-          const data = await res.json();
-          setProjects(data || []);
-        } else {
-          const { data } = await supabase.from("projects").select("id, name");
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const { data } = await supabase
+            .from("projects")
+            .select("id, title")
+            .eq("user_id", user.id)
+            .order("created_at", { ascending: false });
           if (data) {
             setProjects(data);
           }
@@ -76,10 +74,14 @@ export const TaskFormSheet: React.FC<TaskFormSheetProps> = ({
       setTitle(editingTask.title || "");
       setSubtasks(editingTask.subtasks || []);
       setSelectedProjectId(editingTask.project_id || "");
+      setDueDate(editingTask.due_date || format(new Date(), "yyyy-MM-dd"));
+      setPriority(editingTask.priority || "medium");
     } else {
       setTitle("");
       setSubtasks([]);
       setSelectedProjectId("");
+      setDueDate(format(new Date(), "yyyy-MM-dd"));
+      setPriority("medium");
     }
   }, [editingTask, isAdding]);
 
@@ -176,15 +178,13 @@ export const TaskFormSheet: React.FC<TaskFormSheetProps> = ({
     const formEl = e.target as HTMLFormElement;
     const formData = new FormData(formEl);
 
-    const dueDate =
-      (formData.get("due_date") as string) || format(new Date(), "yyyy-MM-dd");
     const isToday = dueDate === format(new Date(), "yyyy-MM-dd");
 
     const taskData = {
       title,
       description: formData.get("description"),
       status: formData.get("status") || "todo",
-      priority: formData.get("priority") || "medium",
+      priority: priority || "medium",
       scheduled_time: formData.get("start_time"),
       estimated_min: parseInt(formData.get("duration") as string) || 25,
       due_date: dueDate,
@@ -366,48 +366,65 @@ export const TaskFormSheet: React.FC<TaskFormSheetProps> = ({
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
               <div className="space-y-3">
                 <label className="text-xs font-bold text-text-secondary uppercase tracking-widest ml-1">
-                  Priority
+                  {language === 'ar' ? 'الأولوية' : 'Priority'}
                 </label>
-                <div className="flex items-center gap-3 bg-bg-secondary/30 p-2.5 rounded-2xl border border-border">
+                <div className="flex items-center gap-2 bg-bg-secondary/30 p-2 rounded-2xl border border-border">
                   {[
-                    { val: "low", color: "bg-green-500" },
-                    {
-                      val: "medium",
-                      color: "bg-white border border-border shadow-sm",
-                    },
-                    { val: "high", color: "bg-red-500" },
+                    { val: "low", label: language === 'ar' ? "سهل" : "Low", activeColor: "bg-green-500 text-white border-green-500 shadow-sm", inactiveColor: "bg-green-500/5 text-green-500 border-green-500/10 hover:bg-green-500/10" },
+                    { val: "medium", label: language === 'ar' ? "متوسط" : "Medium", activeColor: "bg-amber-500 text-white border-amber-500 shadow-sm", inactiveColor: "bg-amber-500/5 text-amber-500 border-amber-500/10 hover:bg-amber-500/10" },
+                    { val: "high", label: language === 'ar' ? "عاجل" : "High", activeColor: "bg-red-500 text-white border-red-500 shadow-sm", inactiveColor: "bg-red-500/5 text-red-500 border-red-500/10 hover:bg-red-500/10" },
                   ].map((p) => (
-                    <label key={p.val} className="flex-1 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="priority"
-                        value={p.val}
-                        defaultChecked={
-                          editingTask?.priority === p.val ||
-                          (!editingTask && p.val === "medium")
-                        }
-                        className="peer sr-only"
-                      />
-                      <div className="aspect-square rounded-xl flex items-center justify-center transition-all border-2 border-transparent peer-checked:border-accent/40 peer-checked:scale-110 hover:bg-bg-secondary">
-                        <div className={`w-4 h-4 rounded-full ${p.color}`} />
-                      </div>
-                    </label>
+                    <button
+                      key={p.val}
+                      type="button"
+                      onClick={() => setPriority(p.val)}
+                      className={`flex-1 py-2 px-1 text-center rounded-xl font-bold text-xs border transition-all ${
+                        priority === p.val ? p.activeColor : p.inactiveColor
+                      }`}
+                    >
+                      {p.label}
+                    </button>
                   ))}
                 </div>
               </div>
               <div className="space-y-3">
-                <label className="text-xs font-bold text-text-secondary uppercase tracking-widest ml-1">
-                  Date
-                </label>
+                <div className="flex justify-between items-center ml-1">
+                  <label className="text-xs font-bold text-text-secondary uppercase tracking-widest">
+                    {language === 'ar' ? 'التاريخ' : 'Date'}
+                  </label>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setDueDate(format(new Date(), "yyyy-MM-dd"))}
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-md transition-all cursor-pointer ${
+                        dueDate === format(new Date(), "yyyy-MM-dd")
+                          ? "bg-accent/20 text-accent"
+                          : "bg-bg-secondary text-text-secondary hover:text-text-primary"
+                      }`}
+                    >
+                      {language === 'ar' ? 'اليوم' : 'Today'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDueDate(format(addDays(new Date(), 1), "yyyy-MM-dd"))}
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-md transition-all cursor-pointer ${
+                        dueDate === format(addDays(new Date(), 1), "yyyy-MM-dd")
+                          ? "bg-accent/20 text-accent"
+                          : "bg-bg-secondary text-text-secondary hover:text-text-primary"
+                      }`}
+                    >
+                      {language === 'ar' ? 'غداً' : 'Tomorrow'}
+                    </button>
+                  </div>
+                </div>
                 <input
                   name="due_date"
                   type="date"
-                  defaultValue={
-                    editingTask?.due_date || format(new Date(), "yyyy-MM-dd")
-                  }
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
                   className="w-full bg-bg-secondary/30 border border-border rounded-xl py-3 px-4 text-text-primary outline-none focus:border-accent transition-all text-sm font-bold"
                 />
               </div>
@@ -474,7 +491,7 @@ export const TaskFormSheet: React.FC<TaskFormSheetProps> = ({
                   <option value="">{language === "ar" ? "🚫 بدون مشروع" : "None"}</option>
                   {projects.map((p) => (
                     <option key={p.id} value={p.id}>
-                      📁 {p.name}
+                      📁 {p.title || p.name}
                     </option>
                   ))}
                 </select>

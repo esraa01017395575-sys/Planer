@@ -3,14 +3,17 @@ import { useLocation } from 'wouter';
 import { supabase } from '../lib/supabase';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Sparkles, ArrowRight, Sun, Moon, Zap, Brain, Check } from 'lucide-react';
+import { useAppContext } from '../context/AppContext';
 
 export default function OnboardingPage() {
+  const { language } = useAppContext();
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({
     name: '',
     wakeTime: '07:00',
     sleepTime: '23:00',
-    energyPeak: 'morning'
+    energyPeak: 'morning',
+    lifeAreas: [] as string[]
   });
   const [loading, setLoading] = useState(false);
   const [, setLocation] = useLocation();
@@ -40,6 +43,7 @@ export default function OnboardingPage() {
           wake_time: formattedWake,
           sleep_time: formattedSleep,
           energy_peak: formData.energyPeak,
+          life_areas: formData.lifeAreas,
           is_onboarded: true
         }, { onConflict: 'user_id' });
 
@@ -54,8 +58,8 @@ export default function OnboardingPage() {
 
   const steps = [
     {
-      title: "What's your name?",
-      subtitle: "Let's personalize your Life OS experience.",
+      title: language === 'ar' ? "ما هو اسمك؟" : "What's your name?",
+      subtitle: language === 'ar' ? "دعنا نضفي طابعاً شخصياً على تجربتك." : "Let's personalize your Life OS experience.",
       icon: Sparkles,
       content: (
         <div className="space-y-4">
@@ -63,54 +67,105 @@ export default function OnboardingPage() {
             type="text" 
             value={formData.name}
             onChange={(e) => setFormData({...formData, name: e.target.value})}
-            placeholder="Enter your name"
-            className="w-full bg-bg-secondary/50 border-none rounded-2xl py-4 px-6 outline-none focus:ring-2 focus:ring-accent/20 transition-all text-lg font-medium"
+            placeholder={language === 'ar' ? "أدخل اسمك هنا" : "Enter your name"}
+            className="w-full bg-bg-secondary/50 border-none rounded-2xl py-4 px-6 outline-none focus:ring-2 focus:ring-accent/20 transition-all text-lg font-medium text-text-primary"
           />
         </div>
       )
     },
     {
-      title: "Your Daily Rhythm",
-      subtitle: "When do you usually start and end your day?",
+      title: language === 'ar' ? "إيقاعك اليومي" : "Your Daily Rhythm",
+      subtitle: language === 'ar' ? "متى تبدأ وتنهي يومك عادةً؟" : "When do you usually start and end your day?",
       icon: Sun,
       content: (
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 gap-2">
           <div className="space-y-2">
-            <label className="text-xs font-bold text-text-secondary uppercase tracking-widest ml-1">Wake Up</label>
+            <label className="text-xs font-bold text-text-secondary uppercase tracking-widest ml-1">
+              {language === 'ar' ? 'الاستيقاظ' : 'Wake Up'}
+            </label>
             <input 
               type="time" 
               value={formData.wakeTime}
               onChange={(e) => setFormData({...formData, wakeTime: e.target.value})}
-              className="w-full bg-bg-secondary/50 border-none rounded-2xl py-4 px-6 outline-none focus:ring-2 focus:ring-accent/20 transition-all"
+              className="w-full bg-bg-secondary/50 border-none rounded-2xl py-4 px-6 outline-none focus:ring-2 focus:ring-accent/20 transition-all text-text-primary"
             />
           </div>
           <div className="space-y-2">
-            <label className="text-xs font-bold text-text-secondary uppercase tracking-widest ml-1">Sleep</label>
+            <label className="text-xs font-bold text-text-secondary uppercase tracking-widest ml-1">
+              {language === 'ar' ? 'النوم' : 'Sleep'}
+            </label>
             <input 
               type="time" 
               value={formData.sleepTime}
               onChange={(e) => setFormData({...formData, sleepTime: e.target.value})}
-              className="w-full bg-bg-secondary/50 border-none rounded-2xl py-4 px-6 outline-none focus:ring-2 focus:ring-accent/20 transition-all"
+              className="w-full bg-bg-secondary/50 border-none rounded-2xl py-4 px-6 outline-none focus:ring-2 focus:ring-accent/20 transition-all text-text-primary"
             />
           </div>
         </div>
       )
     },
     {
-      title: "Peak Energy",
-      subtitle: "When do you feel most productive and alert?",
+      title: language === 'ar' ? "أوقات طاقتك القصوى" : "Peak Energy",
+      subtitle: language === 'ar' ? "متى تشعر بالنشاط والإنتاجية العالية؟" : "When do you feel most productive and alert?",
       icon: Zap,
       content: (
         <div className="grid grid-cols-2 gap-3">
-          {['morning', 'afternoon', 'evening', 'night'].map((peak) => (
-            <button
-              key={peak}
-              onClick={() => setFormData({...formData, energyPeak: peak as any})}
-              className={`p-4 rounded-2xl border transition-all text-left capitalize font-bold ${formData.energyPeak === peak ? 'bg-accent text-white border-accent shadow-lg shadow-accent/20' : 'bg-bg-secondary/50 border-transparent hover:border-accent/30'}`}
-            >
-              {peak}
-            </button>
-          ))}
+          {['morning', 'afternoon', 'evening', 'night'].map((peak) => {
+            const labelAr = peak === 'morning' ? 'الصباح' : peak === 'afternoon' ? 'الظهيرة' : peak === 'evening' ? 'المساء' : 'الليل';
+            return (
+              <button
+                key={peak}
+                onClick={() => setFormData({...formData, energyPeak: peak as any})}
+                className={`p-4 rounded-2xl border transition-all text-left capitalize font-bold ${formData.energyPeak === peak ? 'bg-accent text-white border-accent shadow-lg shadow-accent/20' : 'bg-bg-secondary/50 border-transparent hover:border-accent/30 text-text-primary'}`}
+              >
+                {language === 'ar' ? labelAr : peak}
+              </button>
+            );
+          })}
+        </div>
+      )
+    },
+    {
+      title: language === 'ar' ? "مجالات الاهتمام والتركيز" : "Areas of Focus",
+      subtitle: language === 'ar' ? "اختر المجالات التي تود تحسينها وتتبعها (يمكنك اختيار أكثر من مجال)" : "Select the areas you'd like to improve and track (you can select multiple).",
+      icon: Brain,
+      content: (
+        <div className="grid grid-cols-1 gap-3">
+          {[
+            { key: 'productivity', ar: 'الإنتاجية والتركيز ⚡', en: 'Productivity & Focus ⚡' },
+            { key: 'health', ar: 'الصحة واللياقة البدنية 💪', en: 'Health & Fitness 💪' },
+            { key: 'learning', ar: 'التعلم وتطوير المهارات 📚', en: 'Learning & Skills 📚' },
+            { key: 'spiritual', ar: 'الجانب الروحي والراحة النفسية 🧘', en: 'Spiritual & Wellness 🧘' },
+            { key: 'social', ar: 'العلاقات والجانب الاجتماعي 🤝', en: 'Social & Relationships 🤝' }
+          ].map((area) => {
+            const isSelected = formData.lifeAreas.includes(area.key);
+            return (
+              <button
+                key={area.key}
+                onClick={() => {
+                  if (isSelected) {
+                    setFormData({
+                      ...formData,
+                      lifeAreas: formData.lifeAreas.filter(a => a !== area.key)
+                    });
+                  } else {
+                    setFormData({
+                      ...formData,
+                      lifeAreas: [...formData.lifeAreas, area.key]
+                    });
+                  }
+                }}
+                className={`p-4 rounded-2xl border transition-all text-left flex items-center justify-between font-bold ${
+                  isSelected 
+                    ? 'bg-accent text-white border-accent shadow-lg shadow-accent/20' 
+                    : 'bg-bg-secondary/50 border-transparent hover:border-accent/30 text-text-primary'
+                }`}
+              >
+                <span>{language === 'ar' ? area.ar : area.en}</span>
+                {isSelected && <Check className="w-5 h-5 text-white" />}
+              </button>
+            );
+          })}
         </div>
       )
     }
@@ -162,7 +217,7 @@ export default function OnboardingPage() {
               disabled={loading || (step === 1 && !formData.name)}
               className="bg-accent text-white px-8 py-4 rounded-2xl font-bold shadow-lg shadow-accent/20 hover:scale-[1.05] active:scale-[0.95] transition-all flex items-center gap-2 disabled:opacity-50"
             >
-              {loading ? 'Setting up...' : step === steps.length ? 'Finish' : 'Next'}
+              {loading ? (language === 'ar' ? 'جاري الإعداد...' : 'Setting up...') : step === steps.length ? (language === 'ar' ? 'إنهاء' : 'Finish') : (language === 'ar' ? 'التالي' : 'Next')}
               <ArrowRight className="w-5 h-5" />
             </button>
           </div>

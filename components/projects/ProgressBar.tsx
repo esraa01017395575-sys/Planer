@@ -1,5 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
+import { useAppContext } from '../../context/AppContext';
 
 interface ProgressBarProps {
   progress: number;
@@ -12,6 +13,8 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({
   size = 'md', 
   showText = true 
 }) => {
+  const { language } = useAppContext();
+  const isAr = language === 'ar';
   const roundedProgress = Math.min(100, Math.max(0, Math.round(progress)));
   
   const heightClass = {
@@ -24,7 +27,7 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({
     <div className="w-full">
       {showText && (
         <div className="flex justify-between items-center mb-1.5 text-xs font-mono text-text-secondary">
-          <span>التقدم / Progress</span>
+          <span>{isAr ? "التقدم" : "Progress"}</span>
           <span className="font-bold text-accent">{roundedProgress}%</span>
         </div>
       )}

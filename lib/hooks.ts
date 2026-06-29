@@ -2,6 +2,33 @@ import { useState, useEffect } from 'react';
 import { supabase } from './supabase';
 import { useAppContext } from '../context/AppContext';
 
+const playCompleteSound = () => {
+  if (typeof window !== 'undefined' && localStorage.getItem('soundMuted') === 'true') {
+    return;
+  }
+  try {
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6 ascending triumphant major chord
+    notes.forEach((freq, idx) => {
+      const osc = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime + idx * 0.08);
+      gainNode.gain.setValueAtTime(0.03, audioCtx.currentTime + idx * 0.08);
+      gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + idx * 0.08 + 0.3);
+      
+      osc.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      
+      osc.start(audioCtx.currentTime + idx * 0.08);
+      osc.stop(audioCtx.currentTime + idx * 0.08 + 0.35);
+    });
+  } catch (e) {
+    console.warn("Failed to play completion sound:", e);
+  }
+};
+
 export const useGetDailySchedule = (options?: { date?: string }) => {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -160,7 +187,7 @@ export const useGetTasks = () => {
 };
 
 export const useGetDailyQuote = () => {
-  const [data, setData] = useState<string>("");
+  const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -169,34 +196,38 @@ export const useGetDailyQuote = () => {
         setLoading(true);
         const { data: quotes, error } = await supabase
           .from('quotes')
-          .select('text')
+          .select('text_en, text_ar, author')
           .limit(10); // Get a pool and pick one (simplified daily logic)
 
         if (!error && quotes && quotes.length > 0) {
           // Select one based on day of year
           const dayOfYear = Math.floor((new Date().getTime() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
           const index = dayOfYear % quotes.length;
-          setData(quotes[index].text);
+          setData(quotes[index]);
         } else {
           // Fallback pool
           const fallbacks = [
-            "Your future is created by what you do today, not tomorrow.",
-            "Focus on being productive instead of busy.",
-            "The secret of getting ahead is getting started.",
-            "Efficiency is doing things right; effectiveness is doing the right things.",
-            "It is not daily increase, but daily decrease. Hack away at the unessential.",
-            "Productivity is never an accident. It is always the result of a commitment to excellence.",
-            "Done is better than perfect.",
-            "Design your day, before it designs you.",
-            "Action is the foundational key to all success.",
-            "Discipline is choosing between what you want now and what you want most."
+            { text_en: "Your future is created by what you do today, not tomorrow.", text_ar: "مستقبلك يصنعه ما تفعله اليوم، ليس غدًا.", author: "Joe" },
+            { text_en: "Focus on being productive instead of busy.", text_ar: "ركز على أن تكون منتجًا بدلاً من أن تكون مشغولاً.", author: "Anonym" },
+            { text_en: "The secret of getting ahead is getting started.", text_ar: "سر التقدم هو البدء.", author: "Mark Twain" },
+            { text_en: "Efficiency is doing things right; effectiveness is doing the right things.", text_ar: "الكفاءة هي فعل الأشياء بشكل صحيح؛ والفاعلية هي فعل الأشياء الصحيحة.", author: "Peter Drucker" },
+            { text_en: "It is not daily increase, but daily decrease. Hack away at the unessential.", text_ar: "الأمر لا يتعلق بالزيادة اليومية، بل بالنقصان اليومي. تخلص من الشيء غير الضروري.", author: "Bruce Lee" },
+            { text_en: "Productivity is never an accident. It is always the result of a commitment to excellence.", text_ar: "الإنتاجية ليست صدفة أبداً. إنها دائماً نتيجة التزام بالتميز.", author: "Paul J. Meyer" },
+            { text_en: "Done is better than perfect.", text_ar: "الإنجاز أفضل من المثالية.", author: "Sheryl Sandberg" },
+            { text_en: "Design your day, before it designs you.", text_ar: "صمم يومك، قبل أن يصممك هو.", author: "Coach" },
+            { text_en: "Action is the foundational key to all success.", text_ar: "العمل هو المفتاح الأساسي لكل نجاح.", author: "Pablo Picasso" },
+            { text_en: "Discipline is choosing between what you want now and what you want most.", text_ar: "الانضباط هو الاختيار بين ما تريده الآن وما تريده أكثر.", author: "Abraham Lincoln" }
           ];
           const dayOfYear = Math.floor((new Date().getTime() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
           setData(fallbacks[dayOfYear % fallbacks.length]);
         }
       } catch (err) {
         console.error('Error fetching quote:', err);
-        setData("The leading rule for the lawyer, as for the man of every calling, is diligence.");
+        setData({
+          text_en: "The leading rule for the lawyer, as for the man of every calling, is diligence.",
+          text_ar: "القاعدة الرائدة للمحامي، كما هو الحال بالنسبة للرجل في كل مهنة، هي الاجتهاد.",
+          author: "Abraham Lincoln"
+        });
       } finally {
         setLoading(false);
       }
@@ -240,6 +271,7 @@ export const useCompleteHabit = () => {
       }
 
       if (options?.onSuccess) options.onSuccess();
+      playCompleteSound();
     } catch (err: any) {
       console.error('Complete Habit Error:', err);
       if (options?.onError) options.onError(err);
@@ -300,6 +332,10 @@ export const useUpdateTask = () => {
         .eq('id', id);
 
       if (error) throw error;
+
+      if (data && data.status === 'done') {
+        playCompleteSound();
+      }
 
       // Handle subtasks using subtasks table
       if (subtasks && Array.isArray(subtasks)) {

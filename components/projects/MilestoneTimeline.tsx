@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Circle, Clock, CheckSquare, TriangleAlert, ChevronDown, ChevronUp, Plus } from 'lucide-react';
+import { CheckCircle2, Circle, Clock, CheckSquare, TriangleAlert, ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react';
 import { ProjectMilestone } from '../../types/projects';
+import { useAppContext } from '../../context/AppContext';
 
 interface MilestoneTimelineProps {
   milestones: ProjectMilestone[];
   onToggleTask?: (milestoneIndex: number, taskIndex: number) => void;
   onToggleMilestone?: (milestoneIndex: number) => void;
   onAddTaskToTodo?: (taskText: string) => void;
+  onDeleteMilestone?: (milestoneIndex: number) => void;
   readOnly?: boolean;
 }
 
@@ -15,20 +17,25 @@ export const MilestoneTimeline: React.FC<MilestoneTimelineProps> = ({
   onToggleTask,
   onToggleMilestone,
   onAddTaskToTodo,
+  onDeleteMilestone,
   readOnly = false
 }) => {
+  const { language } = useAppContext();
+  const isAr = language === 'ar';
   const [expandedMilestones, setExpandedMilestones] = useState<Record<number, boolean>>({ 0: true });
 
   const toggleExpand = (idx: number) => {
     setExpandedMilestones(prev => ({ ...prev, [idx]: !prev[idx] }));
   };
 
+  const languageIsArabic = () => isAr;
+
   if (!milestones || milestones.length === 0) {
     return (
       <div className="text-center py-8 bg-bg-secondary/40 rounded-2xl border border-border/10 p-6">
         <TriangleAlert className="w-8 h-8 text-text-secondary mx-auto mb-2 opacity-30" />
-        <p className="text-sm font-medium text-text-secondary">لا توجد أهداف محددة لهذا المشروع بعد. جرب استخدام المساعد الذكي!</p>
-        <p className="text-xs text-text-secondary/60 mt-1">No milestones defined. Start with AI assistance or add them manually!</p>
+        <p className="text-sm font-medium text-text-secondary">{isAr ? "لا توجد أهداف محددة لهذا المشروع بعد. جرب استخدام المساعد الذكي!" : "No milestones defined for this project yet. Try using AI Advisor!"}</p>
+        <p className="text-xs text-text-secondary/60 mt-1">Start with AI assistance or add them manually!</p>
       </div>
     );
   }
@@ -49,7 +56,7 @@ export const MilestoneTimeline: React.FC<MilestoneTimelineProps> = ({
                 isCompleted 
                   ? 'bg-accent border-accent text-white shadow-md shadow-accent/20' 
                   : 'bg-bg-primary border-border text-text-secondary hover:border-accent'
-              } ${languageIsArabic() ? 'right-3' : 'left-3'}`}
+              } ${isAr ? 'right-3' : 'left-3'}`}
             >
               {isCompleted ? (
                 <CheckCircle2 className="w-4 h-4" />
@@ -68,21 +75,37 @@ export const MilestoneTimeline: React.FC<MilestoneTimelineProps> = ({
                   <div className="flex gap-4 mt-2 text-xs font-mono text-text-secondary">
                     <span className="flex items-center gap-1.5">
                       <Clock className="w-3.5 h-3.5 text-accent" />
-                      {milestone.estimatedHours} س
+                      {milestone.estimatedHours} {isAr ? 'س' : 'h'}
                     </span>
                     <span className="flex items-center gap-1.5">
                       <CheckSquare className="w-3.5 h-3.5 text-indigo-400" />
-                      {milestone.tasks?.length || 0} مهام
+                      {milestone.tasks?.length || 0} {isAr ? 'مهام' : 'tasks'}
                     </span>
                   </div>
                 </div>
 
-                <button 
-                  onClick={() => toggleExpand(mIdx)}
-                  className="p-1.5 text-text-secondary hover:bg-accent/10 hover:text-accent rounded-lg transition-all"
-                >
-                  {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                </button>
+                <div className="flex items-center gap-1">
+                  {!readOnly && onDeleteMilestone && (
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm(isAr ? "هل أنت متأكد من حذف هذه المرحلة؟" : "Are you sure you want to delete this milestone?")) {
+                          onDeleteMilestone(mIdx);
+                        }
+                      }}
+                      className="p-1.5 text-red-500/60 hover:bg-red-500/10 hover:text-red-500 rounded-lg transition-all"
+                      title={isAr ? "حذف هذا الهدف" : "Delete Milestone"}
+                    >
+                      <Trash2 className="w-4.5 h-4.5" />
+                    </button>
+                  )}
+                  <button 
+                    onClick={() => toggleExpand(mIdx)}
+                    className="p-1.5 text-text-secondary hover:bg-accent/10 hover:text-accent rounded-lg transition-all"
+                  >
+                    {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
 
               {/* Tasks List */}
@@ -118,11 +141,11 @@ export const MilestoneTimeline: React.FC<MilestoneTimelineProps> = ({
                               e.stopPropagation();
                               onAddTaskToTodo(task);
                             }}
-                            title={languageIsArabic() ? "إرسال لمهام اليوم" : "Add to To-Do List"}
+                            title={isAr ? "إرسال لمهام اليوم" : "Add to To-Do List"}
                             className="p-1 px-1.5 text-accent bg-accent/5 border border-accent/10 hover:bg-accent hover:text-white rounded-lg transition-all opacity-0 group-hover:opacity-100 md:opacity-60 flex items-center gap-1 cursor-pointer font-bold shrink-0 ml-2"
                           >
                             <Plus className="w-3.5 h-3.5" />
-                            <span>{languageIsArabic() ? "تنفيذ اليوم" : "Today"}</span>
+                            <span>{isAr ? "تنفيذ اليوم" : "Today"}</span>
                           </button>
                         )}
                       </div>
@@ -136,9 +159,4 @@ export const MilestoneTimeline: React.FC<MilestoneTimelineProps> = ({
       })}
     </div>
   );
-};
-
-// Simple helper to detect document direction
-const languageIsArabic = () => {
-  return document.documentElement.getAttribute('lang') === 'ar';
 };
